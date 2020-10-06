@@ -18,28 +18,37 @@
 
 package org.apache.flink.api.java.typeutils.runtime;
 
+import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.operators.Keys.ExpressionKeys;
+import org.apache.flink.api.common.operators.Keys.IncompatibleKeysException;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.typeutils.CompositeType.FlatFieldDescriptor;
+import org.apache.flink.api.common.typeutils.SerializerTestBase;
+import org.apache.flink.api.common.typeutils.TypeComparator;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshotSerializationUtil;
+import org.apache.flink.api.java.tuple.Tuple1;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.api.java.typeutils.PojoTypeInfo;
+import org.apache.flink.api.java.typeutils.TupleTypeInfo;
+import org.apache.flink.api.java.typeutils.TypeExtractor;
+import org.apache.flink.core.memory.DataInputViewStreamWrapper;
+import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
+import org.junit.Assert;
+import org.junit.Test;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
 
-import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.common.typeutils.SerializerTestBase;
-import org.apache.flink.api.common.typeutils.TypeComparator;
-import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.CompositeType.FlatFieldDescriptor;
-import org.apache.flink.api.common.operators.Keys.ExpressionKeys;
-import org.apache.flink.api.common.operators.Keys.IncompatibleKeysException;
-import org.apache.flink.api.java.tuple.Tuple1;
-import org.apache.flink.api.java.tuple.Tuple3;
-import org.apache.flink.api.java.typeutils.PojoTypeInfo;
-import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.apache.flink.api.java.typeutils.TypeExtractor;
-
-import org.junit.Assert;
-import org.junit.Test;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 /**
  * A test for the {@link PojoSerializer}.
@@ -191,6 +200,20 @@ public class PojoSerializerTest extends SerializerTestBase<PojoSerializerTest.Te
 			return true;
 		}
 	}
+
+	public static class SubTestUserClassA extends TestUserClass {
+		public int subDumm1;
+		public String subDumm2;
+
+		public SubTestUserClassA() {}
+	}
+
+	public static class SubTestUserClassB extends TestUserClass {
+		public Double subDumm1;
+		public float subDumm2;
+
+		public SubTestUserClassB() {}
+	}
 	
 	/**
 	 * This tests if the hashes returned by the pojo and tuple comparators are the same
@@ -240,4 +263,210 @@ public class PojoSerializerTest extends SerializerTestBase<PojoSerializerTest.Te
 		Assert.assertTrue("The hashing for tuples and pojos must be the same, so that they are mixable. Also for those with multiple key fields", multiPojoHash == multiTupleHash);
 		
 	}
-}	
+
+	// --------------------------------------------------------------------------------------------
+	// Configuration snapshotting & reconfiguring tests
+	// --------------------------------------------------------------------------------------------
+
+	/**
+	 * Verifies that reconfiguring with a config snapshot of a preceding POJO serializer
+	 * with different POJO type will result in INCOMPATIBLE.
+	 */
+	@Test
+	public void testReconfigureWithDifferentPojoType() throws Exception {
+		PojoSerializer<SubTestUserClassB> pojoSerializer1 = (PojoSerializer<SubTestUserClassB>)
+			TypeExtractor.getForClass(SubTestUserClassB.class).createSerializer(new ExecutionConfig());
+
+		// snapshot configuration and serialize to bytes
+		TypeSerializerSnapshot pojoSerializerConfigSnapshot = pojoSerializer1.snapshotConfiguration();
+		byte[] serializedConfig;
+		try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+			TypeSerializerSnapshotSerializationUtil.writeSerializerSnapshot(
+				new DataOutputViewStreamWrapper(out), pojoSerializerConfigSnapshot, pojoSerializer1);
+			serializedConfig = out.toByteArray();
+		}
+
+		PojoSerializer<SubTestUserClassA> pojoSerializer2 = (PojoSerializer<SubTestUserClassA>)
+			TypeExtractor.getForClass(SubTestUserClassA.class).createSerializer(new ExecutionConfig());
+
+		// read configuration again from bytes
+		try(ByteArrayInputStream in = new ByteArrayInputStream(serializedConfig)) {
+			pojoSerializerConfigSnapshot = TypeSerializerSnapshotSerializationUtil.readSerializerSnapshot(
+				new DataInputViewStreamWrapper(in), Thread.currentThread().getContextClassLoader(), pojoSerializer2);
+		}
+
+		@SuppressWarnings("unchecked")
+		TypeSerializerSchemaCompatibility<SubTestUserClassA> compatResult =
+			pojoSerializerConfigSnapshot.resolveSchemaCompatibility(pojoSerializer2);
+		assertTrue(compatResult.isIncompatible());
+	}
+
+	/**
+	 * Tests that reconfiguration correctly reorders subclass registrations to their previous order.
+	 */
+	@Test
+	public void testReconfigureDifferentSubclassRegistrationOrder() throws Exception {
+		ExecutionConfig executionConfig = new ExecutionConfig();
+		executionConfig.registerPojoType(SubTestUserClassA.class);
+		executionConfig.registerPojoType(SubTestUserClassB.class);
+
+		PojoSerializer<TestUserClass> pojoSerializer = (PojoSerializer<TestUserClass>) type.createSerializer(executionConfig);
+
+		// get original registration ids
+		int subClassATag = pojoSerializer.getRegisteredClasses().get(SubTestUserClassA.class);
+		int subClassBTag = pojoSerializer.getRegisteredClasses().get(SubTestUserClassB.class);
+
+		// snapshot configuration and serialize to bytes
+		TypeSerializerSnapshot pojoSerializerConfigSnapshot = pojoSerializer.snapshotConfiguration();
+		byte[] serializedConfig;
+		try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+			TypeSerializerSnapshotSerializationUtil.writeSerializerSnapshot(
+				new DataOutputViewStreamWrapper(out), pojoSerializerConfigSnapshot, pojoSerializer);
+			serializedConfig = out.toByteArray();
+		}
+
+		// use new config and instantiate new PojoSerializer
+		executionConfig = new ExecutionConfig();
+		executionConfig.registerPojoType(SubTestUserClassB.class); // test with B registered before A
+		executionConfig.registerPojoType(SubTestUserClassA.class);
+
+		pojoSerializer = (PojoSerializer<TestUserClass>) type.createSerializer(executionConfig);
+
+		// read configuration from bytes
+		try(ByteArrayInputStream in = new ByteArrayInputStream(serializedConfig)) {
+			pojoSerializerConfigSnapshot = TypeSerializerSnapshotSerializationUtil.readSerializerSnapshot(
+				new DataInputViewStreamWrapper(in), Thread.currentThread().getContextClassLoader(), pojoSerializer);
+		}
+
+		@SuppressWarnings("unchecked")
+		TypeSerializerSchemaCompatibility<TestUserClass> compatResult =
+			pojoSerializerConfigSnapshot.resolveSchemaCompatibility(pojoSerializer);
+		assertTrue(compatResult.isCompatibleWithReconfiguredSerializer());
+		assertTrue(compatResult.getReconfiguredSerializer() instanceof PojoSerializer);
+
+		// reconfigure - check reconfiguration result and that registration ids remains the same
+		//assertEquals(ReconfigureResult.COMPATIBLE, pojoSerializer.reconfigure(pojoSerializerConfigSnapshot));
+		PojoSerializer<TestUserClass> reconfiguredPojoSerializer = (PojoSerializer<TestUserClass>) compatResult.getReconfiguredSerializer();
+		assertEquals(subClassATag, reconfiguredPojoSerializer.getRegisteredClasses().get(SubTestUserClassA.class).intValue());
+		assertEquals(subClassBTag, reconfiguredPojoSerializer.getRegisteredClasses().get(SubTestUserClassB.class).intValue());
+	}
+
+	/**
+	 * Tests that reconfiguration repopulates previously cached subclass serializers.
+	 */
+	@Test
+	public void testReconfigureRepopulateNonregisteredSubclassSerializerCache() throws Exception {
+		// don't register any subclasses
+		PojoSerializer<TestUserClass> pojoSerializer = (PojoSerializer<TestUserClass>) type.createSerializer(new ExecutionConfig());
+
+		// create cached serializers for SubTestUserClassA and SubTestUserClassB
+		pojoSerializer.getSubclassSerializer(SubTestUserClassA.class);
+		pojoSerializer.getSubclassSerializer(SubTestUserClassB.class);
+
+		assertEquals(2, pojoSerializer.getSubclassSerializerCache().size());
+		assertTrue(pojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassA.class));
+		assertTrue(pojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassB.class));
+
+		// snapshot configuration and serialize to bytes
+		TypeSerializerSnapshot pojoSerializerConfigSnapshot = pojoSerializer.snapshotConfiguration();
+		byte[] serializedConfig;
+		try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+			TypeSerializerSnapshotSerializationUtil.writeSerializerSnapshot(
+				new DataOutputViewStreamWrapper(out), pojoSerializerConfigSnapshot, pojoSerializer);
+			serializedConfig = out.toByteArray();
+		}
+
+		// instantiate new PojoSerializer
+
+		pojoSerializer = (PojoSerializer<TestUserClass>) type.createSerializer(new ExecutionConfig());
+
+		// read configuration from bytes
+		try(ByteArrayInputStream in = new ByteArrayInputStream(serializedConfig)) {
+			pojoSerializerConfigSnapshot = TypeSerializerSnapshotSerializationUtil.readSerializerSnapshot(
+				new DataInputViewStreamWrapper(in), Thread.currentThread().getContextClassLoader(), pojoSerializer);
+		}
+
+		// reconfigure - check reconfiguration result and that subclass serializer cache is repopulated
+		@SuppressWarnings("unchecked")
+		TypeSerializerSchemaCompatibility<TestUserClass> compatResult =
+			pojoSerializerConfigSnapshot.resolveSchemaCompatibility(pojoSerializer);
+		assertTrue(compatResult.isCompatibleWithReconfiguredSerializer());
+		assertTrue(compatResult.getReconfiguredSerializer() instanceof PojoSerializer);
+
+		PojoSerializer<TestUserClass> reconfiguredPojoSerializer = (PojoSerializer<TestUserClass>) compatResult.getReconfiguredSerializer();
+		assertEquals(2, reconfiguredPojoSerializer.getSubclassSerializerCache().size());
+		assertTrue(reconfiguredPojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassA.class));
+		assertTrue(reconfiguredPojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassB.class));
+	}
+
+	/**
+	 * Tests that:
+	 *  - Previous Pojo serializer did not have registrations, and created cached serializers for subclasses
+	 *  - On restore, it had those subclasses registered
+	 *
+	 * In this case, after reconfiguration, the cache should be repopulated, and registrations should
+	 * also exist for the subclasses.
+	 *
+	 * Note: the cache still needs to be repopulated because previous data of those subclasses were
+	 * written with the cached serializers. In this case, the repopulated cache has reconfigured serializers
+	 * for the subclasses so that previous written data can be read, but the registered serializers
+	 * for the subclasses do not necessarily need to be reconfigured since they will only be used to
+	 * write new data.
+	 */
+	@Test
+	public void testReconfigureWithPreviouslyNonregisteredSubclasses() throws Exception {
+		// don't register any subclasses at first
+		PojoSerializer<TestUserClass> pojoSerializer = (PojoSerializer<TestUserClass>) type.createSerializer(new ExecutionConfig());
+
+		// create cached serializers for SubTestUserClassA and SubTestUserClassB
+		pojoSerializer.getSubclassSerializer(SubTestUserClassA.class);
+		pojoSerializer.getSubclassSerializer(SubTestUserClassB.class);
+
+		// make sure serializers are in cache
+		assertEquals(2, pojoSerializer.getSubclassSerializerCache().size());
+		assertTrue(pojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassA.class));
+		assertTrue(pojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassB.class));
+
+		// make sure that registrations are empty
+		assertTrue(pojoSerializer.getRegisteredClasses().isEmpty());
+		assertEquals(0, pojoSerializer.getRegisteredSerializers().length);
+
+		// snapshot configuration and serialize to bytes
+		TypeSerializerSnapshot pojoSerializerConfigSnapshot = pojoSerializer.snapshotConfiguration();
+		byte[] serializedConfig;
+		try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+			TypeSerializerSnapshotSerializationUtil.writeSerializerSnapshot(
+				new DataOutputViewStreamWrapper(out), pojoSerializerConfigSnapshot, pojoSerializer);
+			serializedConfig = out.toByteArray();
+		}
+
+		// instantiate new PojoSerializer, with new execution config that has the subclass registrations
+		ExecutionConfig newExecutionConfig = new ExecutionConfig();
+		newExecutionConfig.registerPojoType(SubTestUserClassA.class);
+		newExecutionConfig.registerPojoType(SubTestUserClassB.class);
+		pojoSerializer = (PojoSerializer<TestUserClass>) type.createSerializer(newExecutionConfig);
+
+		// read configuration from bytes
+		try(ByteArrayInputStream in = new ByteArrayInputStream(serializedConfig)) {
+			pojoSerializerConfigSnapshot = TypeSerializerSnapshotSerializationUtil.readSerializerSnapshot(
+				new DataInputViewStreamWrapper(in), Thread.currentThread().getContextClassLoader(), pojoSerializer);
+		}
+
+		// reconfigure - check reconfiguration result and that
+		// 1) subclass serializer cache is repopulated
+		// 2) registrations also contain the now registered subclasses
+		@SuppressWarnings("unchecked")
+		TypeSerializerSchemaCompatibility<TestUserClass> compatResult =
+			pojoSerializerConfigSnapshot.resolveSchemaCompatibility(pojoSerializer);
+		assertTrue(compatResult.isCompatibleWithReconfiguredSerializer());
+		assertTrue(compatResult.getReconfiguredSerializer() instanceof PojoSerializer);
+
+		PojoSerializer<TestUserClass> reconfiguredPojoSerializer = (PojoSerializer<TestUserClass>) compatResult.getReconfiguredSerializer();
+		assertEquals(2, reconfiguredPojoSerializer.getSubclassSerializerCache().size());
+		assertTrue(reconfiguredPojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassA.class));
+		assertTrue(reconfiguredPojoSerializer.getSubclassSerializerCache().containsKey(SubTestUserClassB.class));
+		assertEquals(2, reconfiguredPojoSerializer.getRegisteredClasses().size());
+		assertTrue(reconfiguredPojoSerializer.getRegisteredClasses().containsKey(SubTestUserClassA.class));
+		assertTrue(reconfiguredPojoSerializer.getRegisteredClasses().containsKey(SubTestUserClassB.class));
+	}
+}

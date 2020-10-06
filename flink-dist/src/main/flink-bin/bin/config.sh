@@ -18,16 +18,42 @@
 ################################################################################
 
 constructFlinkClassPath() {
+    local FLINK_DIST
+    local FLINK_CLASSPATH
 
-    for jarfile in "$FLINK_LIB_DIR"/*.jar ; do
-        if [[ $FLINK_CLASSPATH = "" ]]; then
-            FLINK_CLASSPATH=$jarfile;
+    while read -d '' -r jarfile ; do
+        if [[ "$jarfile" =~ .*/flink-dist[^/]*.jar$ ]]; then
+            FLINK_DIST="$FLINK_DIST":"$jarfile"
+        elif [[ "$FLINK_CLASSPATH" == "" ]]; then
+            FLINK_CLASSPATH="$jarfile";
         else
-            FLINK_CLASSPATH=$FLINK_CLASSPATH:$jarfile
+            FLINK_CLASSPATH="$FLINK_CLASSPATH":"$jarfile"
         fi
-    done
+    done < <(find "$FLINK_LIB_DIR" ! -type d -name '*.jar' -print0 | sort -z)
 
-    echo $FLINK_CLASSPATH
+    if [[ "$FLINK_DIST" == "" ]]; then
+        # write error message to stderr since stdout is stored as the classpath
+        (>&2 echo "[ERROR] Flink distribution jar not found in $FLINK_LIB_DIR.")
+
+        # exit function with empty classpath to force process failure
+        exit 1
+    fi
+
+    echo "$FLINK_CLASSPATH""$FLINK_DIST"
+}
+
+findFlinkDistJar() {
+    local FLINK_DIST="`find "$FLINK_LIB_DIR" -name 'flink-dist*.jar'`"
+
+    if [[ "$FLINK_DIST" == "" ]]; then
+        # write error message to stderr since stdout is stored as the classpath
+        (>&2 echo "[ERROR] Flink distribution jar not found in $FLINK_LIB_DIR.")
+
+        # exit function with empty classpath to force process failure
+        exit 1
+    fi
+
+    echo "$FLINK_DIST"
 }
 
 # These are used to mangle paths that are passed to java when using
@@ -83,28 +109,33 @@ DEFAULT_ENV_LOG_MAX=5                               # Maximum number of old log 
 DEFAULT_ENV_JAVA_OPTS=""                            # Optional JVM args
 DEFAULT_ENV_JAVA_OPTS_JM=""                         # Optional JVM args (JobManager)
 DEFAULT_ENV_JAVA_OPTS_TM=""                         # Optional JVM args (TaskManager)
+DEFAULT_ENV_JAVA_OPTS_HS=""                         # Optional JVM args (HistoryServer)
+DEFAULT_ENV_JAVA_OPTS_CLI=""                        # Optional JVM args (Client)
 DEFAULT_ENV_SSH_OPTS=""                             # Optional SSH parameters running in cluster mode
+DEFAULT_YARN_CONF_DIR=""                            # YARN Configuration Directory, if necessary
+DEFAULT_HADOOP_CONF_DIR=""                          # Hadoop Configuration Directory, if necessary
+DEFAULT_HBASE_CONF_DIR=""                           # HBase Configuration Directory, if necessary
 
 ########################################################################################################################
 # CONFIG KEYS: The default values can be overwritten by the following keys in conf/flink-conf.yaml
 ########################################################################################################################
 
-KEY_JOBM_MEM_SIZE="jobmanager.heap.mb"
-KEY_TASKM_MEM_SIZE="taskmanager.heap.mb"
-KEY_TASKM_MEM_MANAGED_SIZE="taskmanager.memory.size"
-KEY_TASKM_MEM_MANAGED_FRACTION="taskmanager.memory.fraction"
-KEY_TASKM_OFFHEAP="taskmanager.memory.off-heap"
-KEY_TASKM_MEM_PRE_ALLOCATE="taskmanager.memory.preallocate"
+KEY_TASKM_COMPUTE_NUMA="taskmanager.compute.numa"
 
 KEY_ENV_PID_DIR="env.pid.dir"
 KEY_ENV_LOG_DIR="env.log.dir"
 KEY_ENV_LOG_MAX="env.log.max"
+KEY_ENV_YARN_CONF_DIR="env.yarn.conf.dir"
+KEY_ENV_HADOOP_CONF_DIR="env.hadoop.conf.dir"
+KEY_ENV_HBASE_CONF_DIR="env.hbase.conf.dir"
 KEY_ENV_JAVA_HOME="env.java.home"
 KEY_ENV_JAVA_OPTS="env.java.opts"
 KEY_ENV_JAVA_OPTS_JM="env.java.opts.jobmanager"
 KEY_ENV_JAVA_OPTS_TM="env.java.opts.taskmanager"
+KEY_ENV_JAVA_OPTS_HS="env.java.opts.historyserver"
+KEY_ENV_JAVA_OPTS_CLI="env.java.opts.client"
 KEY_ENV_SSH_OPTS="env.ssh.opts"
-KEY_RECOVERY_MODE="recovery.mode"
+KEY_HIGH_AVAILABILITY="high-availability"
 KEY_ZK_HEAP_MB="zookeeper.heap.mb"
 
 ########################################################################################################################
@@ -132,23 +163,33 @@ bin=`dirname "$target"`
 SYMLINK_RESOLVED_BIN=`cd "$bin"; pwd -P`
 
 # Define the main directory of the flink installation
-FLINK_ROOT_DIR=`dirname "$SYMLINK_RESOLVED_BIN"`
-FLINK_LIB_DIR=$FLINK_ROOT_DIR/lib
+# If config.sh is called by pyflink-shell.sh in python bin directory(pip installed), then do not need to set the FLINK_HOME here.
+if [ -z "$_FLINK_HOME_DETERMINED" ]; then
+    FLINK_HOME=`dirname "$SYMLINK_RESOLVED_BIN"`
+fi
+FLINK_LIB_DIR=$FLINK_HOME/lib
+FLINK_PLUGINS_DIR=$FLINK_HOME/plugins
+FLINK_OPT_DIR=$FLINK_HOME/opt
 
-### Exported environment variables ###
-export FLINK_CONF_DIR
-# export /lib dir to access it during deployment of the Yarn staging files
-export FLINK_LIB_DIR
 
 # These need to be mangled because they are directly passed to java.
 # The above lib path is used by the shell script to retrieve jars in a
 # directory, so it needs to be unmangled.
-FLINK_ROOT_DIR_MANGLED=`manglePath "$FLINK_ROOT_DIR"`
-if [ -z "$FLINK_CONF_DIR" ]; then FLINK_CONF_DIR=$FLINK_ROOT_DIR_MANGLED/conf; fi
-FLINK_BIN_DIR=$FLINK_ROOT_DIR_MANGLED/bin
-DEFAULT_FLINK_LOG_DIR=$FLINK_ROOT_DIR_MANGLED/log
+FLINK_HOME_DIR_MANGLED=`manglePath "$FLINK_HOME"`
+if [ -z "$FLINK_CONF_DIR" ]; then FLINK_CONF_DIR=$FLINK_HOME_DIR_MANGLED/conf; fi
+FLINK_BIN_DIR=$FLINK_HOME_DIR_MANGLED/bin
+DEFAULT_FLINK_LOG_DIR=$FLINK_HOME_DIR_MANGLED/log
 FLINK_CONF_FILE="flink-conf.yaml"
 YAML_CONF=${FLINK_CONF_DIR}/${FLINK_CONF_FILE}
+
+### Exported environment variables ###
+export FLINK_CONF_DIR
+export FLINK_BIN_DIR
+export FLINK_PLUGINS_DIR
+# export /lib dir to access it during deployment of the Yarn staging files
+export FLINK_LIB_DIR
+# export /opt dir to access it for the SQL client
+export FLINK_OPT_DIR
 
 ########################################################################################################################
 # ENVIRONMENT VARIABLES
@@ -187,34 +228,15 @@ fi
 
 IS_NUMBER="^[0-9]+$"
 
-# Define FLINK_JM_HEAP if it is not already set
-if [ -z "${FLINK_JM_HEAP}" ]; then
-    FLINK_JM_HEAP=$(readFromConfig ${KEY_JOBM_MEM_SIZE} 0 "${YAML_CONF}")
-fi
-
-# Define FLINK_TM_HEAP if it is not already set
-if [ -z "${FLINK_TM_HEAP}" ]; then
-    FLINK_TM_HEAP=$(readFromConfig ${KEY_TASKM_MEM_SIZE} 0 "${YAML_CONF}")
-fi
-
-# Define FLINK_TM_MEM_MANAGED_SIZE if it is not already set
-if [ -z "${FLINK_TM_MEM_MANAGED_SIZE}" ]; then
-    FLINK_TM_MEM_MANAGED_SIZE=$(readFromConfig ${KEY_TASKM_MEM_MANAGED_SIZE} 0 "${YAML_CONF}")
-fi
-
-# Define FLINK_TM_MEM_MANAGED_FRACTION if it is not already set
-if [ -z "${FLINK_TM_MEM_MANAGED_FRACTION}" ]; then
-    FLINK_TM_MEM_MANAGED_FRACTION=$(readFromConfig ${KEY_TASKM_MEM_MANAGED_FRACTION} 0.7 "${YAML_CONF}")
-fi
-
-# Define FLINK_TM_OFFHEAP if it is not already set
-if [ -z "${FLINK_TM_OFFHEAP}" ]; then
-    FLINK_TM_OFFHEAP=$(readFromConfig ${KEY_TASKM_OFFHEAP} "false" "${YAML_CONF}")
-fi
-
-# Define FLINK_TM_MEM_PRE_ALLOCATE if it is not already set
-if [ -z "${FLINK_TM_MEM_PRE_ALLOCATE}" ]; then
-    FLINK_TM_MEM_PRE_ALLOCATE=$(readFromConfig ${KEY_TASKM_MEM_PRE_ALLOCATE} "false" "${YAML_CONF}")
+# Verify that NUMA tooling is available
+command -v numactl >/dev/null 2>&1
+if [[ $? -ne 0 ]]; then
+    FLINK_TM_COMPUTE_NUMA="false"
+else
+    # Define FLINK_TM_COMPUTE_NUMA if it is not already set
+    if [ -z "${FLINK_TM_COMPUTE_NUMA}" ]; then
+        FLINK_TM_COMPUTE_NUMA=$(readFromConfig ${KEY_TASKM_COMPUTE_NUMA} "false" "${YAML_CONF}")
+    fi
 fi
 
 if [ -z "${MAX_LOG_FILE_NUMBER}" ]; then
@@ -223,6 +245,18 @@ fi
 
 if [ -z "${FLINK_LOG_DIR}" ]; then
     FLINK_LOG_DIR=$(readFromConfig ${KEY_ENV_LOG_DIR} "${DEFAULT_FLINK_LOG_DIR}" "${YAML_CONF}")
+fi
+
+if [ -z "${YARN_CONF_DIR}" ]; then
+    YARN_CONF_DIR=$(readFromConfig ${KEY_ENV_YARN_CONF_DIR} "${DEFAULT_YARN_CONF_DIR}" "${YAML_CONF}")
+fi
+
+if [ -z "${HADOOP_CONF_DIR}" ]; then
+    HADOOP_CONF_DIR=$(readFromConfig ${KEY_ENV_HADOOP_CONF_DIR} "${DEFAULT_HADOOP_CONF_DIR}" "${YAML_CONF}")
+fi
+
+if [ -z "${HBASE_CONF_DIR}" ]; then
+    HBASE_CONF_DIR=$(readFromConfig ${KEY_ENV_HBASE_CONF_DIR} "${DEFAULT_HBASE_CONF_DIR}" "${YAML_CONF}")
 fi
 
 if [ -z "${FLINK_PID_DIR}" ]; then
@@ -248,6 +282,18 @@ if [ -z "${FLINK_ENV_JAVA_OPTS_TM}" ]; then
     FLINK_ENV_JAVA_OPTS_TM="$( echo "${FLINK_ENV_JAVA_OPTS_TM}" | sed -e 's/^"//'  -e 's/"$//' )"
 fi
 
+if [ -z "${FLINK_ENV_JAVA_OPTS_HS}" ]; then
+    FLINK_ENV_JAVA_OPTS_HS=$(readFromConfig ${KEY_ENV_JAVA_OPTS_HS} "${DEFAULT_ENV_JAVA_OPTS_HS}" "${YAML_CONF}")
+    # Remove leading and ending double quotes (if present) of value
+    FLINK_ENV_JAVA_OPTS_HS="$( echo "${FLINK_ENV_JAVA_OPTS_HS}" | sed -e 's/^"//'  -e 's/"$//' )"
+fi
+
+if [ -z "${FLINK_ENV_JAVA_OPTS_CLI}" ]; then
+    FLINK_ENV_JAVA_OPTS_CLI=$(readFromConfig ${KEY_ENV_JAVA_OPTS_CLI} "${DEFAULT_ENV_JAVA_OPTS_CLI}" "${YAML_CONF}")
+    # Remove leading and ending double quotes (if present) of value
+    FLINK_ENV_JAVA_OPTS_CLI="$( echo "${FLINK_ENV_JAVA_OPTS_CLI}" | sed -e 's/^"//'  -e 's/"$//' )"
+fi
+
 if [ -z "${FLINK_SSH_OPTS}" ]; then
     FLINK_SSH_OPTS=$(readFromConfig ${KEY_ENV_SSH_OPTS} "${DEFAULT_ENV_SSH_OPTS}" "${YAML_CONF}")
 fi
@@ -257,37 +303,74 @@ if [ -z "${ZK_HEAP}" ]; then
     ZK_HEAP=$(readFromConfig ${KEY_ZK_HEAP_MB} 0 "${YAML_CONF}")
 fi
 
-if [ -z "${RECOVERY_MODE}" ]; then
-    RECOVERY_MODE=$(readFromConfig ${KEY_RECOVERY_MODE} "standalone" "${YAML_CONF}")
+# High availability
+if [ -z "${HIGH_AVAILABILITY}" ]; then
+     HIGH_AVAILABILITY=$(readFromConfig ${KEY_HIGH_AVAILABILITY} "" "${YAML_CONF}")
+     if [ -z "${HIGH_AVAILABILITY}" ]; then
+        # Try deprecated value
+        DEPRECATED_HA=$(readFromConfig "recovery.mode" "" "${YAML_CONF}")
+        if [ -z "${DEPRECATED_HA}" ]; then
+            HIGH_AVAILABILITY="none"
+        elif [ ${DEPRECATED_HA} == "standalone" ]; then
+            # Standalone is now 'none'
+            HIGH_AVAILABILITY="none"
+        else
+            HIGH_AVAILABILITY=${DEPRECATED_HA}
+        fi
+     fi
 fi
 
 # Arguments for the JVM. Used for job and task manager JVMs.
 # DO NOT USE FOR MEMORY SETTINGS! Use conf/flink-conf.yaml with keys
-# KEY_JOBM_MEM_SIZE and KEY_TASKM_MEM_SIZE for that!
+# JobManagerOptions#TOTAL_PROCESS_MEMORY and TaskManagerOptions#TOTAL_PROCESS_MEMORY for that!
 if [ -z "${JVM_ARGS}" ]; then
     JVM_ARGS=""
 fi
 
-# Check if deprecated HADOOP_HOME is set.
-if [ -n "$HADOOP_HOME" ]; then
-    # HADOOP_HOME is set. Check if its a Hadoop 1.x or 2.x HADOOP_HOME path
-    if [ -d "$HADOOP_HOME/conf" ]; then
-        # its a Hadoop 1.x
-        HADOOP_CONF_DIR="$HADOOP_CONF_DIR:$HADOOP_HOME/conf"
+# Check if deprecated HADOOP_HOME is set, and specify config path to HADOOP_CONF_DIR if it's empty.
+if [ -z "$HADOOP_CONF_DIR" ]; then
+    if [ -n "$HADOOP_HOME" ]; then
+        # HADOOP_HOME is set. Check if its a Hadoop 1.x or 2.x HADOOP_HOME path
+        if [ -d "$HADOOP_HOME/conf" ]; then
+            # It's Hadoop 1.x
+            HADOOP_CONF_DIR="$HADOOP_HOME/conf"
+        fi
+        if [ -d "$HADOOP_HOME/etc/hadoop" ]; then
+            # It's Hadoop 2.2+
+            HADOOP_CONF_DIR="$HADOOP_HOME/etc/hadoop"
+        fi
     fi
-    if [ -d "$HADOOP_HOME/etc/hadoop" ]; then
-        # Its Hadoop 2.2+
-        HADOOP_CONF_DIR="$HADOOP_CONF_DIR:$HADOOP_HOME/etc/hadoop"
+fi
+
+# if neither HADOOP_CONF_DIR nor HADOOP_CLASSPATH are set, use some common default (if available)
+if [ -z "$HADOOP_CONF_DIR" ] && [ -z "$HADOOP_CLASSPATH" ]; then
+    if [ -d "/etc/hadoop/conf" ]; then
+        echo "Setting HADOOP_CONF_DIR=/etc/hadoop/conf because no HADOOP_CONF_DIR or HADOOP_CLASSPATH was set."
+        HADOOP_CONF_DIR="/etc/hadoop/conf"
+    fi
+fi
+
+# Check if deprecated HBASE_HOME is set, and specify config path to HBASE_CONF_DIR if it's empty.
+if [ -z "$HBASE_CONF_DIR" ]; then
+    if [ -n "$HBASE_HOME" ]; then
+        # HBASE_HOME is set.
+        if [ -d "$HBASE_HOME/conf" ]; then
+            HBASE_CONF_DIR="$HBASE_HOME/conf"
+        fi
+    fi
+fi
+
+# try and set HBASE_CONF_DIR to some common default if it's not set
+if [ -z "$HBASE_CONF_DIR" ]; then
+    if [ -d "/etc/hbase/conf" ]; then
+        echo "Setting HBASE_CONF_DIR=/etc/hbase/conf because no HBASE_CONF_DIR was set."
+        HBASE_CONF_DIR="/etc/hbase/conf"
     fi
 fi
 
 INTERNAL_HADOOP_CLASSPATHS="${HADOOP_CLASSPATH}:${HADOOP_CONF_DIR}:${YARN_CONF_DIR}"
 
 if [ -n "${HBASE_CONF_DIR}" ]; then
-    # Setup the HBase classpath.
-    INTERNAL_HADOOP_CLASSPATHS="${INTERNAL_HADOOP_CLASSPATHS}:`hbase classpath`"
-
-    # We add the HBASE_CONF_DIR last to ensure the right config directory is used.
     INTERNAL_HADOOP_CLASSPATHS="${INTERNAL_HADOOP_CLASSPATHS}:${HBASE_CONF_DIR}"
 fi
 
@@ -295,17 +378,26 @@ fi
 # also potentially includes topology information and the taskManager type
 extractHostName() {
     # handle comments: extract first part of string (before first # character)
-    SLAVE=`echo $1 | cut -d'#' -f 1`
+    WORKER=`echo $1 | cut -d'#' -f 1`
 
     # Extract the hostname from the network hierarchy
-    if [[ "$SLAVE" =~ ^.*/([0-9a-zA-Z.-]+)$ ]]; then
-            SLAVE=${BASH_REMATCH[1]}
+    if [[ "$WORKER" =~ ^.*/([0-9a-zA-Z.-]+)$ ]]; then
+            WORKER=${BASH_REMATCH[1]}
     fi
 
-    echo $SLAVE
+    echo $WORKER
 }
 
-# Auxilliary function for log file rotation
+# Auxilliary functions for log file rotation
+rotateLogFilesWithPrefix() {
+    dir=$1
+    prefix=$2
+    while read -r log ; do
+        rotateLogFile "$log"
+    # find distinct set of log file names, ignoring the rotation number (trailing dot and digit)
+    done < <(find "$dir" ! -type d -path "${prefix}*" | sed s/\.[0-9][0-9]*$// | sort | uniq)
+}
+
 rotateLogFile() {
     log=$1;
     num=$MAX_LOG_FILE_NUMBER
@@ -330,6 +422,7 @@ readMasters() {
     MASTERS=()
     WEBUIPORTS=()
 
+    MASTERS_ALL_LOCALHOST=true
     GOON=true
     while $GOON; do
         read line || GOON=false
@@ -345,30 +438,133 @@ readMasters() {
             else
                 WEBUIPORTS+=(${WEBUIPORT})
             fi
+
+            if [ "${HOST}" != "localhost" ] && [ "${HOST}" != "127.0.0.1" ] ; then
+                MASTERS_ALL_LOCALHOST=false
+            fi
         fi
     done < "$MASTERS_FILE"
 }
 
-readSlaves() {
-    SLAVES_FILE="${FLINK_CONF_DIR}/slaves"
+readWorkers() {
+    WORKERS_FILE="${FLINK_CONF_DIR}/workers"
 
-    if [[ ! -f "$SLAVES_FILE" ]]; then
-        echo "No slaves file. Please specify slaves in 'conf/slaves'."
+    if [[ ! -f "$WORKERS_FILE" ]]; then
+        echo "No workers file. Please specify workers in 'conf/workers'."
         exit 1
     fi
 
-    SLAVES=()
+    WORKERS=()
 
+    WORKERS_ALL_LOCALHOST=true
     GOON=true
     while $GOON; do
         read line || GOON=false
         HOST=$( extractHostName $line)
-        if [ -n "$HOST" ]; then
-            SLAVES+=(${HOST})
+        if [ -n "$HOST" ] ; then
+            WORKERS+=(${HOST})
+            if [ "${HOST}" != "localhost" ] && [ "${HOST}" != "127.0.0.1" ] ; then
+                WORKERS_ALL_LOCALHOST=false
+            fi
         fi
-    done < "$SLAVES_FILE"
+    done < "$WORKERS_FILE"
 }
 
-useOffHeapMemory() {
-    [[ "`echo ${FLINK_TM_OFFHEAP} | tr '[:upper:]' '[:lower:]'`" == "true" ]]
+# starts or stops TMs on all workers
+# TMWorkers start|stop
+TMWorkers() {
+    CMD=$1
+
+    readWorkers
+
+    if [ ${WORKERS_ALL_LOCALHOST} = true ] ; then
+        # all-local setup
+        for worker in ${WORKERS[@]}; do
+            "${FLINK_BIN_DIR}"/taskmanager.sh "${CMD}"
+        done
+    else
+        # non-local setup
+        # start/stop TaskManager instance(s) using pdsh (Parallel Distributed Shell) when available
+        command -v pdsh >/dev/null 2>&1
+        if [[ $? -ne 0 ]]; then
+            for worker in ${WORKERS[@]}; do
+                ssh -n $FLINK_SSH_OPTS $worker -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/taskmanager.sh\" \"${CMD}\" &"
+            done
+        else
+            PDSH_SSH_ARGS="" PDSH_SSH_ARGS_APPEND=$FLINK_SSH_OPTS pdsh -w $(IFS=, ; echo "${WORKERS[*]}") \
+                "nohup /bin/bash -l \"${FLINK_BIN_DIR}/taskmanager.sh\" \"${CMD}\""
+        fi
+    fi
+}
+
+runBashJavaUtilsCmd() {
+    local cmd=$1
+    local conf_dir=$2
+    local class_path=$3
+    local dynamic_args=${@:4}
+    class_path=`manglePathList "${class_path}"`
+
+    local output=`${JAVA_RUN} -classpath "${class_path}" org.apache.flink.runtime.util.bash.BashJavaUtils ${cmd} --configDir "${conf_dir}" $dynamic_args 2>&1 | tail -n 1000`
+    if [[ $? -ne 0 ]]; then
+        echo "[ERROR] Cannot run BashJavaUtils to execute command ${cmd}." 1>&2
+        # Print the output in case the user redirect the log to console.
+        echo "$output" 1>&2
+        exit 1
+    fi
+
+    echo "$output"
+}
+
+extractExecutionResults() {
+    local output="$1"
+    local expected_lines="$2"
+    local EXECUTION_PREFIX="BASH_JAVA_UTILS_EXEC_RESULT:"
+    local execution_results
+    local num_lines
+
+    execution_results=$(echo "${output}" | grep ${EXECUTION_PREFIX})
+    num_lines=$(echo "${execution_results}" | wc -l)
+    # explicit check for empty result, becuase if execution_results is empty, then wc returns 1
+    if [[ -z ${execution_results} ]]; then
+        echo "[ERROR] The execution result is empty." 1>&2
+        exit 1
+    fi
+    if [[ ${num_lines} -ne ${expected_lines} ]]; then
+        echo "[ERROR] The execution results has unexpected number of lines, expected: ${expected_lines}, actual: ${num_lines}." 1>&2
+        echo "[ERROR] An execution result line is expected following the prefix '${EXECUTION_PREFIX}'" 1>&2
+        echo "$output" 1>&2
+        exit 1
+    fi
+
+    echo "${execution_results//${EXECUTION_PREFIX}/}"
+}
+
+extractLoggingOutputs() {
+    local output="$1"
+    local EXECUTION_PREFIX="BASH_JAVA_UTILS_EXEC_RESULT:"
+
+    echo "${output}" | grep -v ${EXECUTION_PREFIX}
+}
+
+parseJmJvmArgsAndExportLogs() {
+  java_utils_output=$(runBashJavaUtilsCmd GET_JM_RESOURCE_PARAMS "${FLINK_CONF_DIR}" "${FLINK_BIN_DIR}/bash-java-utils.jar:$(findFlinkDistJar)" "$@")
+  logging_output=$(extractLoggingOutputs "${java_utils_output}")
+  jvm_params=$(extractExecutionResults "${java_utils_output}" 1)
+
+  if [[ $? -ne 0 ]]; then
+    echo "[ERROR] Could not get JVM parameters and dynamic configurations properly."
+    echo "[ERROR] Raw output from BashJavaUtils:"
+    echo "$java_utils_output"
+    exit 1
+  fi
+
+  export JVM_ARGS="${JVM_ARGS} ${jvm_params}"
+
+  export FLINK_INHERITED_LOGS="
+$FLINK_INHERITED_LOGS
+
+JM_RESOURCE_PARAMS extraction logs:
+jvm_params: $jvm_params
+logs: $logging_output
+"
 }

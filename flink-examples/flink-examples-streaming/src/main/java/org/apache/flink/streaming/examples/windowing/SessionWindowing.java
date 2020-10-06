@@ -19,7 +19,6 @@ package org.apache.flink.streaming.examples.windowing;
 
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
@@ -30,6 +29,10 @@ import org.apache.flink.streaming.api.windowing.time.Time;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * An example of session windowing that keys events by ID and groups and counts them in
+ * session with gaps of 3 milliseconds.
+ */
 public class SessionWindowing {
 
 	@SuppressWarnings("serial")
@@ -39,7 +42,6 @@ public class SessionWindowing {
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
 		env.getConfig().setGlobalJobParameters(params);
-		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		env.setParallelism(1);
 
 		final boolean fileOutput = params.has("output");
@@ -58,7 +60,7 @@ public class SessionWindowing {
 		input.add(new Tuple3<>("c", 11L, 1));
 
 		DataStream<Tuple3<String, Long, Integer>> source = env
-				.addSource(new SourceFunction<Tuple3<String,Long,Integer>>() {
+				.addSource(new SourceFunction<Tuple3<String, Long, Integer>>() {
 					private static final long serialVersionUID = 1L;
 
 					@Override
@@ -66,9 +68,6 @@ public class SessionWindowing {
 						for (Tuple3<String, Long, Integer> value : input) {
 							ctx.collectWithTimestamp(value, value.f1);
 							ctx.emitWatermark(new Watermark(value.f1 - 1));
-							if (!fileOutput) {
-								System.out.println("Collected: " + value);
-							}
 						}
 						ctx.emitWatermark(new Watermark(Long.MAX_VALUE));
 					}
@@ -80,7 +79,7 @@ public class SessionWindowing {
 
 		// We create sessions for each id with max timeout of 3 time units
 		DataStream<Tuple3<String, Long, Integer>> aggregated = source
-				.keyBy(0)
+				.keyBy(value -> value.f0)
 				.window(EventTimeSessionWindows.withGap(Time.milliseconds(3L)))
 				.sum(2);
 

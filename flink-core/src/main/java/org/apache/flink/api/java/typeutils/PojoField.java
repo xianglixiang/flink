@@ -27,6 +27,7 @@ import java.util.Objects;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.typeutils.runtime.FieldSerializer;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -57,30 +58,13 @@ public class PojoField implements Serializable {
 	private void writeObject(ObjectOutputStream out)
 			throws IOException, ClassNotFoundException {
 		out.defaultWriteObject();
-		out.writeObject(field.getDeclaringClass());
-		out.writeUTF(field.getName());
+		FieldSerializer.serializeField(field, out);
 	}
 
 	private void readObject(ObjectInputStream in)
 			throws IOException, ClassNotFoundException {
 		in.defaultReadObject();
-		Class<?> clazz = (Class<?>)in.readObject();
-		String fieldName = in.readUTF();
-		field = null;
-		// try superclasses as well
-		while (clazz != null) {
-			try {
-				field = clazz.getDeclaredField(fieldName);
-				field.setAccessible(true);
-				break;
-			} catch (NoSuchFieldException e) {
-				clazz = clazz.getSuperclass();
-			}
-		}
-		if (field == null) {
-			throw new RuntimeException("Class resolved at TaskManager is not compatible with class read during Plan setup."
-					+ " (" + fieldName + ")");
-		}
+		field = FieldSerializer.deserializeField(in);
 	}
 
 	@Override
@@ -93,7 +77,7 @@ public class PojoField implements Serializable {
 		if (obj instanceof PojoField) {
 			PojoField other = (PojoField) obj;
 
-			return other.canEqual(this) && type.equals(other.type) &&
+			return type.equals(other.type) &&
 				Objects.equals(field, other.field);
 		} else {
 			return false;
@@ -103,9 +87,5 @@ public class PojoField implements Serializable {
 	@Override
 	public int hashCode() {
 		return Objects.hash(field, type);
-	}
-
-	public boolean canEqual(Object obj) {
-		return obj instanceof PojoField;
 	}
 }

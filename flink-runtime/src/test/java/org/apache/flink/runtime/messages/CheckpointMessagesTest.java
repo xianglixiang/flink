@@ -18,58 +18,77 @@
 
 package org.apache.flink.runtime.messages;
 
-import static org.junit.Assert.*;
-
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
-import org.apache.flink.runtime.messages.checkpoint.NotifyCheckpointComplete;
-import org.apache.flink.runtime.messages.checkpoint.AcknowledgeCheckpoint;
-import org.apache.flink.runtime.messages.checkpoint.TriggerCheckpoint;
-import org.apache.flink.runtime.state.StateHandle;
+import org.apache.flink.core.fs.FSDataInputStream;
 import org.apache.flink.core.testutils.CommonTestUtils;
-import org.apache.flink.util.SerializedValue;
+import org.apache.flink.runtime.checkpoint.CheckpointCoordinatorTestingUtils;
+import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
+import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
+import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
+import org.apache.flink.runtime.jobgraph.JobVertexID;
+import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.messages.checkpoint.AcknowledgeCheckpoint;
+import org.apache.flink.runtime.state.KeyGroupRange;
+import org.apache.flink.runtime.state.StreamStateHandle;
+
 import org.junit.Test;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.Collections;
+import java.util.Optional;
+import java.util.Random;
 
+import static org.apache.flink.runtime.checkpoint.StateHandleDummyUtil.createNewInputChannelStateHandle;
+import static org.apache.flink.runtime.checkpoint.StateHandleDummyUtil.createNewResultSubpartitionStateHandle;
+import static org.apache.flink.runtime.checkpoint.StateObjectCollection.singleton;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.fail;
+
+/**
+ * Tests for checkpoint messages.
+ */
 public class CheckpointMessagesTest {
-	
-	@Test
-	public void testTriggerAndConfirmCheckpoint() {
-		try {
-			NotifyCheckpointComplete cc = new NotifyCheckpointComplete(new JobID(), new ExecutionAttemptID(), 45287698767345L, 467L);
-			testSerializabilityEqualsHashCode(cc);
-			
-			TriggerCheckpoint tc = new TriggerCheckpoint(new JobID(), new ExecutionAttemptID(), 347652734L, 7576752L);
-			testSerializabilityEqualsHashCode(tc);
-			
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-	}
 
 	@Test
 	public void testConfirmTaskCheckpointed() {
+		final Random rnd = new Random();
 		try {
 			AcknowledgeCheckpoint noState = new AcknowledgeCheckpoint(
-											new JobID(), new ExecutionAttemptID(), 569345L);
+					new JobID(), new ExecutionAttemptID(), 569345L);
+
+			KeyGroupRange keyGroupRange = KeyGroupRange.of(42, 42);
+
+			TaskStateSnapshot checkpointStateHandles = new TaskStateSnapshot();
+			checkpointStateHandles.putSubtaskStateByOperatorID(
+				new OperatorID(),
+				new OperatorSubtaskState(
+					CheckpointCoordinatorTestingUtils.generatePartitionableStateHandle(new JobVertexID(), 0, 2, 8, false),
+					null,
+					CheckpointCoordinatorTestingUtils.generateKeyGroupState(keyGroupRange, Collections.singletonList(new MyHandle())),
+					null,
+					singleton(createNewInputChannelStateHandle(10, rnd)),
+					singleton(createNewResultSubpartitionStateHandle(10, rnd))
+				)
+			);
 
 			AcknowledgeCheckpoint withState = new AcknowledgeCheckpoint(
-											new JobID(), new ExecutionAttemptID(), 87658976143L, 
-											new SerializedValue<StateHandle<?>>(new MyHandle()), 0);
-			
+					new JobID(),
+					new ExecutionAttemptID(),
+					87658976143L,
+					new CheckpointMetrics(),
+					checkpointStateHandles);
+
 			testSerializabilityEqualsHashCode(noState);
 			testSerializabilityEqualsHashCode(withState);
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			e.printStackTrace();
 			fail(e.getMessage());
 		}
 	}
-	
+
 	private static void testSerializabilityEqualsHashCode(Serializable o) throws IOException {
 		Object copy = CommonTestUtils.createCopySerializable(o);
 		assertEquals(o, copy);
@@ -77,13 +96,12 @@ public class CheckpointMessagesTest {
 		assertNotNull(o.toString());
 		assertNotNull(copy.toString());
 	}
-	
-	public static class MyHandle implements StateHandle<Serializable> {
+
+	private static class MyHandle implements StreamStateHandle {
 
 		private static final long serialVersionUID = 8128146204128728332L;
 
-		@Override
-		public Serializable getState(ClassLoader userCodeClassLoader) {
+		public Serializable get(ClassLoader userCodeClassLoader) {
 			return null;
 		}
 
@@ -106,6 +124,13 @@ public class CheckpointMessagesTest {
 		}
 
 		@Override
-		public void close() throws IOException {}
+		public FSDataInputStream openInputStream() throws IOException {
+			return null;
+		}
+
+		@Override
+		public Optional<byte[]> asBytesIfInMemory() {
+			return Optional.empty();
+		}
 	}
 }

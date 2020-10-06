@@ -361,7 +361,7 @@ public class WorksetIterationNode extends TwoInputNode implements IterationNode 
 																							atEndGlobal, atEndLocal);
 
 				if (report == FeedbackPropertiesMeetRequirementsReport.NO_PARTIAL_SOLUTION) {
-					; // depends only through broadcast variable on the workset solution
+					// depends only through broadcast variable on the workset solution
 				}
 				else if (report == FeedbackPropertiesMeetRequirementsReport.NOT_MET) {
 					// attach a no-op node through which we create the properties of the original input
@@ -431,8 +431,8 @@ public class WorksetIterationNode extends TwoInputNode implements IterationNode 
 		LocalProperties lp = LocalProperties.EMPTY.addUniqueFields(this.solutionSetKeyFields);
 		
 		// take all combinations of solution set delta and workset plans
-		for (PlanNode solutionSetCandidate : solutionSetDeltaCandidates) {
-			for (PlanNode worksetCandidate : worksetCandidates) {
+		for (PlanNode worksetCandidate : worksetCandidates) {
+			for (PlanNode solutionSetCandidate : solutionSetDeltaCandidates) {
 				// check whether they have the same operator at their latest branching point
 				if (this.singleRoot.areBranchCompatible(solutionSetCandidate, worksetCandidate)) {
 					

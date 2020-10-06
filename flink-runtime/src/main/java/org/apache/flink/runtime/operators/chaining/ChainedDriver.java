@@ -23,14 +23,16 @@ import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.functions.Function;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.metrics.Counter;
-import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.metrics.groups.OperatorIOMetricGroup;
+import org.apache.flink.runtime.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.operators.BatchTask;
 import org.apache.flink.runtime.operators.util.DistributedRuntimeUDFContext;
 import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.runtime.operators.util.metrics.CountingCollector;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.UserCodeClassLoader;
 
 import java.util.Map;
 
@@ -54,7 +56,7 @@ public abstract class ChainedDriver<IT, OT> implements Collector<IT> {
 
 	protected boolean objectReuseEnabled = false;
 	
-	protected MetricGroup metrics;
+	protected OperatorMetricGroup metrics;
 	
 	protected Counter numRecordsIn;
 	
@@ -62,15 +64,15 @@ public abstract class ChainedDriver<IT, OT> implements Collector<IT> {
 
 	
 	public void setup(TaskConfig config, String taskName, Collector<OT> outputCollector,
-			AbstractInvokable parent, ClassLoader userCodeClassLoader, ExecutionConfig executionConfig,
+			AbstractInvokable parent, UserCodeClassLoader userCodeClassLoader, ExecutionConfig executionConfig,
 			Map<String, Accumulator<?,?>> accumulatorMap)
 	{
 		this.config = config;
 		this.taskName = taskName;
-		this.userCodeClassLoader = userCodeClassLoader;
-		this.metrics = parent.getEnvironment().getMetricGroup().addOperator(taskName);
-		this.numRecordsIn = this.metrics.counter("numRecordsIn");
-		this.numRecordsOut = this.metrics.counter("numRecordsOut");
+		this.userCodeClassLoader = userCodeClassLoader.asClassLoader();
+		this.metrics = parent.getEnvironment().getMetricGroup().getOrAddOperator(taskName);
+		this.numRecordsIn = this.metrics.getIOMetricGroup().getNumRecordsInCounter();
+		this.numRecordsOut = this.metrics.getIOMetricGroup().getNumRecordsOutCounter();
 		this.outputCollector = new CountingCollector<>(outputCollector, numRecordsOut);
 
 		Environment env = parent.getEnvironment();
@@ -79,7 +81,7 @@ public abstract class ChainedDriver<IT, OT> implements Collector<IT> {
 			this.udfContext = ((BatchTask<?, ?>) parent).createRuntimeContext(metrics);
 		} else {
 			this.udfContext = new DistributedRuntimeUDFContext(env.getTaskInfo(), userCodeClassLoader,
-					parent.getExecutionConfig(), env.getDistributedCacheEntries(), accumulatorMap, metrics
+					parent.getExecutionConfig(), env.getDistributedCacheEntries(), accumulatorMap, metrics, env.getExternalResourceInfoProvider()
 			);
 		}
 
@@ -104,6 +106,9 @@ public abstract class ChainedDriver<IT, OT> implements Collector<IT> {
 	@Override
 	public abstract void collect(IT record);
 
+	public OperatorIOMetricGroup getIOMetrics() {
+		return this.metrics.getIOMetricGroup();
+	}
 	
 	protected RuntimeContext getUdfRuntimeContext() {
 		return this.udfContext;

@@ -31,6 +31,7 @@ import org.apache.flink.api.common.operators.util.TypeComparable;
 import org.apache.flink.api.common.operators.util.UserCodeClassWrapper;
 import org.apache.flink.api.common.operators.util.UserCodeObjectWrapper;
 import org.apache.flink.api.common.operators.util.UserCodeWrapper;
+import org.apache.flink.api.common.typeinfo.AtomicType;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.CompositeType;
 import org.apache.flink.api.common.typeutils.TypeComparator;
@@ -75,7 +76,12 @@ public class ReduceOperatorBase<T, FT extends ReduceFunction<T>> extends SingleI
 		 * Use a hash-based strategy. This should be faster in most cases, especially if the number
 		 * of different keys is small compared to the number of input elements (eg. 1/10).
 		 */
-		HASH
+		HASH,
+
+		/**
+		 * Disable the use of a combiner.
+		 */
+		NONE
 	}
 
 	private CombineHint hint;
@@ -191,7 +197,7 @@ public class ReduceOperatorBase<T, FT extends ReduceFunction<T>> extends SingleI
 
 		int[] inputColumns = getKeyColumns(0);
 
-		if (!(inputType instanceof CompositeType) && inputColumns.length > 0) {
+		if (!(inputType instanceof CompositeType) && inputColumns.length > 1) {
 			throw new InvalidProgramException("Grouping is only possible on composite types.");
 		}
 
@@ -202,7 +208,9 @@ public class ReduceOperatorBase<T, FT extends ReduceFunction<T>> extends SingleI
 
 		if (inputColumns.length > 0) {
 			boolean[] inputOrderings = new boolean[inputColumns.length];
-			TypeComparator<T> inputComparator = ((CompositeType<T>) inputType).createComparator(inputColumns, inputOrderings, 0, executionConfig);
+			TypeComparator<T> inputComparator = inputType instanceof AtomicType
+					? ((AtomicType<T>) inputType).createComparator(false, executionConfig)
+					: ((CompositeType<T>) inputType).createComparator(inputColumns, inputOrderings, 0, executionConfig);
 
 			Map<TypeComparable<T>, T> aggregateMap = new HashMap<TypeComparable<T>, T>(inputData.size() / 10);
 

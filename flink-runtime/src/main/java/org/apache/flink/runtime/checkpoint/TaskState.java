@@ -19,45 +19,56 @@
 package org.apache.flink.runtime.checkpoint;
 
 import org.apache.flink.runtime.jobgraph.JobVertexID;
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.util.SerializedValue;
+import org.apache.flink.runtime.state.CompositeStateHandle;
+import org.apache.flink.runtime.state.SharedStateRegistry;
+import org.apache.flink.util.Preconditions;
 
-import java.io.Serializable;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
- * Simple container class which contains the task state and key-value state handles for the sub
+ * Simple container class which contains the task state and key-group state handles for the sub
  * tasks of a {@link org.apache.flink.runtime.jobgraph.JobVertex}.
  *
- * This class basically groups all tasks and key groups belonging to the same job vertex together.
+ * <p>This class basically groups all non-partitioned state and key-group state belonging to the same job vertex together.
+ *
+ * @deprecated Internal class for savepoint backwards compatibility. Don't use for other purposes.
  */
-public class TaskState implements Serializable {
+@Deprecated
+public class TaskState implements CompositeStateHandle {
 
 	private static final long serialVersionUID = -4845578005863201810L;
 
 	private final JobVertexID jobVertexID;
 
-	/** Map of task states which can be accessed by their sub task index */
+	/** handles to non-partitioned states, subtaskindex -> subtaskstate. */
 	private final Map<Integer, SubtaskState> subtaskStates;
 
-	/** Map of key-value states which can be accessed by their key group index */
-	private final Map<Integer, KeyGroupState> kvStates;
-
-	/** Parallelism of the operator when it was checkpointed */
+	/** parallelism of the operator when it was checkpointed. */
 	private final int parallelism;
 
-	public TaskState(JobVertexID jobVertexID, int parallelism) {
+	/** maximum parallelism of the operator when the job was first created. */
+	private final int maxParallelism;
+
+	/** length of the operator chain. */
+	private final int chainLength;
+
+	public TaskState(JobVertexID jobVertexID, int parallelism, int maxParallelism, int chainLength) {
+		Preconditions.checkArgument(
+				parallelism <= maxParallelism,
+				"Parallelism " + parallelism + " is not smaller or equal to max parallelism " + maxParallelism + ".");
+		Preconditions.checkArgument(chainLength > 0, "There has to be at least one operator in the operator chain.");
+
 		this.jobVertexID = jobVertexID;
 
 		this.subtaskStates = new HashMap<>(parallelism);
 
-		this.kvStates = new HashMap<>();
-
 		this.parallelism = parallelism;
+		this.maxParallelism = maxParallelism;
+		this.chainLength = chainLength;
 	}
 
 	public JobVertexID getJobVertexID() {
@@ -65,6 +76,8 @@ public class TaskState implements Serializable {
 	}
 
 	public void putState(int subtaskIndex, SubtaskState subtaskState) {
+		Preconditions.checkNotNull(subtaskState);
+
 		if (subtaskIndex < 0 || subtaskIndex >= parallelism) {
 			throw new IndexOutOfBoundsException("The given sub task index " + subtaskIndex +
 				" exceeds the maximum number of sub tasks " + subtaskStates.size());
@@ -86,20 +99,6 @@ public class TaskState implements Serializable {
 		return subtaskStates.values();
 	}
 
-	public long getStateSize() {
-		long result = 0L;
-
-		for (SubtaskState subtaskState : subtaskStates.values()) {
-			result += subtaskState.getStateSize();
-		}
-
-		for (KeyGroupState keyGroupState : kvStates.values()) {
-			result += keyGroupState.getStateSize();
-		}
-
-		return result;
-	}
-
 	public int getNumberCollectedStates() {
 		return subtaskStates.size();
 	}
@@ -108,48 +107,40 @@ public class TaskState implements Serializable {
 		return parallelism;
 	}
 
-	public void putKvState(int keyGroupId, KeyGroupState keyGroupState) {
-		kvStates.put(keyGroupId, keyGroupState);
+	public int getMaxParallelism() {
+		return maxParallelism;
 	}
 
-	public KeyGroupState getKvState(int keyGroupId) {
-		return kvStates.get(keyGroupId);
+	public int getChainLength() {
+		return chainLength;
 	}
 
-	/**
-	 * Retrieve the set of key-value state key groups specified by the given key group partition set.
-	 * The key groups are returned as a map where the key group index maps to the serialized state
-	 * handle of the key group.
-	 *
-	 * @param keyGroupPartition Set of key group indices
-	 * @return Map of serialized key group state handles indexed by their key group index.
-	 */
-	public Map<Integer, SerializedValue<StateHandle<?>>> getUnwrappedKvStates(Set<Integer> keyGroupPartition) {
-		HashMap<Integer, SerializedValue<StateHandle<?>>> result = new HashMap<>(keyGroupPartition.size());
+	@Override
+	public void discardState() throws Exception {
+		for (SubtaskState subtaskState : subtaskStates.values()) {
+			subtaskState.discardState();
+		}
+	}
 
-		for (Integer keyGroupId : keyGroupPartition) {
-			KeyGroupState keyGroupState = kvStates.get(keyGroupId);
+	@Override
+	public void registerSharedStates(SharedStateRegistry sharedStateRegistry) {
+		for (SubtaskState subtaskState : subtaskStates.values()) {
+			subtaskState.registerSharedStates(sharedStateRegistry);
+		}
+	}
 
-			if (keyGroupState != null) {
-				result.put(keyGroupId, kvStates.get(keyGroupId).getKeyGroupState());
+	@Override
+	public long getStateSize() {
+		long result = 0L;
+
+		for (int i = 0; i < parallelism; i++) {
+			SubtaskState subtaskState = subtaskStates.get(i);
+			if (subtaskState != null) {
+				result += subtaskState.getStateSize();
 			}
 		}
 
 		return result;
-	}
-
-	public int getNumberCollectedKvStates() {
-		return kvStates.size();
-	}
-
-	public void discard(ClassLoader classLoader) throws Exception {
-		for (SubtaskState subtaskState : subtaskStates.values()) {
-			subtaskState.discard(classLoader);
-		}
-
-		for (KeyGroupState keyGroupState : kvStates.values()) {
-			keyGroupState.discard(classLoader);
-		}
 	}
 
 	@Override
@@ -157,8 +148,9 @@ public class TaskState implements Serializable {
 		if (obj instanceof TaskState) {
 			TaskState other = (TaskState) obj;
 
-			return jobVertexID.equals(other.jobVertexID) && parallelism == other.parallelism &&
-				subtaskStates.equals(other.subtaskStates) && kvStates.equals(other.kvStates);
+			return jobVertexID.equals(other.jobVertexID)
+					&& parallelism == other.parallelism
+					&& subtaskStates.equals(other.subtaskStates);
 		} else {
 			return false;
 		}
@@ -166,6 +158,22 @@ public class TaskState implements Serializable {
 
 	@Override
 	public int hashCode() {
-		return parallelism + 31 * Objects.hash(jobVertexID, subtaskStates, kvStates);
+		return parallelism + 31 * Objects.hash(jobVertexID, subtaskStates);
+	}
+
+	public Map<Integer, SubtaskState> getSubtaskStates() {
+		return Collections.unmodifiableMap(subtaskStates);
+	}
+
+	@Override
+	public String toString() {
+		// KvStates are always null in 1.1. Don't print this as it might
+		// confuse users that don't care about how we store it internally.
+		return "TaskState(" +
+			"jobVertexID: " + jobVertexID +
+			", parallelism: " + parallelism +
+			", sub task states: " + subtaskStates.size() +
+			", total size (bytes): " + getStateSize() +
+			')';
 	}
 }

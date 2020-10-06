@@ -25,35 +25,31 @@ import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.configuration.AkkaOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.core.io.InputSplitAssigner;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+/**
+ * Test class used by the {@link org.apache.flink.test.classloading.ClassLoaderITCase}.
+ */
 @SuppressWarnings("serial")
 public class StreamingCustomInputSplitProgram {
-	
+
 	public static void main(String[] args) throws Exception {
-		final String jarFile = args[0];
-		final String host = args[1];
-		final int port = Integer.parseInt(args[2]);
-		final int parallelism = Integer.parseInt(args[3]);
+				Configuration config = new Configuration();
 
-		Configuration config = new Configuration();
+		config.setString(AkkaOptions.ASK_TIMEOUT, "5 s");
 
-		config.setString(ConfigConstants.AKKA_ASK_TIMEOUT, "5 s");
-
-		StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(host, port, config, jarFile);
-		env.getConfig().disableSysoutLogging();
-		env.setParallelism(parallelism);
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
 		DataStream<Integer> data = env.createInput(new CustomInputFormat());
 
@@ -62,13 +58,13 @@ public class StreamingCustomInputSplitProgram {
 			public Tuple2<Integer, Double> map(Integer value) throws Exception {
 				return new Tuple2<Integer, Double>(value, value * 0.5);
 			}
-		}).addSink(new NoOpSink());
+		}).addSink(new DiscardingSink<>());
 
 		env.execute();
 	}
 	// --------------------------------------------------------------------------------------------
-	
-	public static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
+
+	private static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
 
 		private static final long serialVersionUID = 1L;
 
@@ -124,7 +120,7 @@ public class StreamingCustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomInputSplit implements InputSplit {
+	private static final class CustomInputSplit implements InputSplit {
 
 		private static final long serialVersionUID = 1L;
 
@@ -140,7 +136,7 @@ public class StreamingCustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomSplitAssigner implements InputSplitAssigner, Serializable {
+	private static final class CustomSplitAssigner implements InputSplitAssigner, Serializable {
 
 		private final List<CustomInputSplit> remainingSplits;
 
@@ -159,11 +155,14 @@ public class StreamingCustomInputSplitProgram {
 				}
 			}
 		}
-	}
 
-	public static class NoOpSink implements SinkFunction<Tuple2<Integer, Double>> {
 		@Override
-		public void invoke(Tuple2<Integer, Double> value) throws Exception {
+		public void returnInputSplit(List<InputSplit> splits, int taskId) {
+			synchronized (this) {
+				for (InputSplit split : splits) {
+					remainingSplits.add((CustomInputSplit) split);
+				}
+			}
 		}
 	}
 }

@@ -19,6 +19,7 @@ package org.apache.flink.util;
 
 import org.slf4j.Logger;
 
+import java.util.Collections;
 import java.util.Properties;
 
 /**
@@ -34,7 +35,6 @@ public class PropertiesUtil {
 	 * @param key key in Properties
 	 * @param defaultValue default value if value is not set
 	 * @return default or value of key
-	 * @throws IllegalArgumentException
 	 */
 	public static int getInt(Properties config, String key, int defaultValue) {
 		String val = config.getProperty(key);
@@ -58,7 +58,6 @@ public class PropertiesUtil {
 	 * @param key key in Properties
 	 * @param defaultValue default value if value is not set
 	 * @return default or value of key
-	 * @throws IllegalArgumentException
 	 */
 	public static long getLong(Properties config, String key, long defaultValue) {
 		String val = config.getProperty(key);
@@ -82,19 +81,58 @@ public class PropertiesUtil {
 	 * @param key key in Properties
 	 * @param defaultValue default value if value is not set
 	 * @return default or value of key
-	 * @throws IllegalArgumentException
 	 */
 	public static long getLong(Properties config, String key, long defaultValue, Logger logger) {
 		try {
 			return getLong(config, key, defaultValue);
-		} catch(IllegalArgumentException iae) {
+		} catch (IllegalArgumentException iae) {
 			logger.warn(iae.getMessage());
 			return defaultValue;
 		}
 	}
 
+	/**
+	 * Get boolean from properties.
+	 * This method returns {@code true} iff the parsed value is "true".
+	 *
+	 * @param config Properties
+	 * @param key key in Properties
+	 * @param defaultValue default value if value is not set
+	 * @return default or value of key
+	 */
+	public static boolean getBoolean(Properties config, String key, boolean defaultValue) {
+		String val = config.getProperty(key);
+		if (val == null) {
+			return defaultValue;
+		} else {
+			return Boolean.parseBoolean(val);
+		}
+	}
+
+	/**
+	 * Flatten a recursive {@link Properties} to a first level property map.
+	 *
+	 * <p>In some cases, {@code KafkaProducer#propsToMap} for example, Properties is used purely as a HashTable
+	 * without considering its default properties.
+	 *
+	 * @param config Properties to be flattened
+	 * @return Properties without defaults; all properties are put in the first-level
+	 */
+	public static Properties flatten(Properties config) {
+		final Properties flattenProperties = new Properties();
+
+		Collections.list(config.propertyNames()).stream().forEach(
+			name -> {
+				Preconditions.checkArgument(name instanceof String);
+				flattenProperties.setProperty((String) name, config.getProperty((String) name));
+			}
+		);
+
+		return flattenProperties;
+	}
+
 	// ------------------------------------------------------------------------
-	
-	/** Private default constructor to prevent instantiation */
+
+	/** Private default constructor to prevent instantiation. */
 	private PropertiesUtil() {}
 }

@@ -18,7 +18,6 @@
 package org.apache.flink.streaming.examples.ml;
 
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks;
@@ -26,24 +25,21 @@ import org.apache.flink.streaming.api.functions.co.CoMapFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.functions.windowing.AllWindowFunction;
 import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
-
-import java.util.concurrent.TimeUnit;
 
 /**
  * Skeleton for incremental machine learning algorithm consisting of a
  * pre-computed model, which gets updated for the new inputs and new input data
  * for which the job provides predictions.
  *
- * <p>
- * This may serve as a base of a number of algorithms, e.g. updating an
+ * <p>This may serve as a base of a number of algorithms, e.g. updating an
  * incremental Alternating Least Squares model while also providing the
  * predictions.
  *
- * <p>
- * This example shows how to use:
+ * <p>This example shows how to use:
  * <ul>
  *   <li>Connected streams
  *   <li>CoFunctions
@@ -63,7 +59,6 @@ public class IncrementalLearningSkeleton {
 		final ParameterTool params = ParameterTool.fromArgs(args);
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
 		DataStream<Integer> trainingData = env.addSource(new FiniteTrainingDataSource());
 		DataStream<Integer> newData = env.addSource(new FiniteNewDataSource());
@@ -71,7 +66,7 @@ public class IncrementalLearningSkeleton {
 		// build new model on every second of new data
 		DataStream<Double[]> model = trainingData
 				.assignTimestampsAndWatermarks(new LinearTimestamp())
-				.timeWindowAll(Time.of(5000, TimeUnit.MILLISECONDS))
+				.windowAll(TumblingEventTimeWindows.of(Time.milliseconds(5000)))
 				.apply(new PartialModelBuilder());
 
 		// use partial model for newData
@@ -147,7 +142,7 @@ public class IncrementalLearningSkeleton {
 		}
 	}
 
-	public static class LinearTimestamp implements AssignerWithPunctuatedWatermarks<Integer> {
+	private static class LinearTimestamp implements AssignerWithPunctuatedWatermarks<Integer> {
 		private static final long serialVersionUID = 1L;
 
 		private long counter = 0L;
@@ -183,7 +178,7 @@ public class IncrementalLearningSkeleton {
 	 * Creates newData using the model produced in batch-processing and the
 	 * up-to-date partial model.
 	 * <p>
-	 * By defaults emits the Integer 0 for every newData and the Integer 1
+	 * By default emits the Integer 0 for every newData and the Integer 1
 	 * for every model update.
 	 * </p>
 	 */

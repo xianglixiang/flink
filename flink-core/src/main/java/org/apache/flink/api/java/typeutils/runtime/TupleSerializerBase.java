@@ -18,6 +18,8 @@
 
 package org.apache.flink.api.java.typeutils.runtime;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
@@ -28,13 +30,14 @@ import java.util.Objects;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
+@Internal
 public abstract class TupleSerializerBase<T> extends TypeSerializer<T> {
 
 	private static final long serialVersionUID = 1L;
 
 	protected final Class<T> tupleClass;
 
-	protected final TypeSerializer<Object>[] fieldSerializers;
+	protected TypeSerializer<Object>[] fieldSerializers;
 
 	protected final int arity;
 
@@ -100,8 +103,7 @@ public abstract class TupleSerializerBase<T> extends TypeSerializer<T> {
 		if (obj instanceof TupleSerializerBase) {
 			TupleSerializerBase<?> other = (TupleSerializerBase<?>) obj;
 
-			return other.canEqual(this) &&
-				tupleClass == other.tupleClass &&
+			return tupleClass == other.tupleClass &&
 				Arrays.equals(fieldSerializers, other.fieldSerializers) &&
 				arity == other.arity;
 		} else {
@@ -109,8 +111,8 @@ public abstract class TupleSerializerBase<T> extends TypeSerializer<T> {
 		}
 	}
 
-	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof TupleSerializerBase;
+	@VisibleForTesting
+	public TypeSerializer<Object>[] getFieldSerializers() {
+		return fieldSerializers;
 	}
 }

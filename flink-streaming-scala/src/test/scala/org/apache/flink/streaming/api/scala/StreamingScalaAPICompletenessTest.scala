@@ -17,18 +17,17 @@
  */
 package org.apache.flink.streaming.api.scala
 
-import java.lang.reflect.Method
-
 import org.apache.flink.api.scala.completeness.ScalaAPICompletenessTestBase
 import org.apache.flink.streaming.api.datastream.{DataStream => JavaStream}
 
-import scala.language.existentials
-
 import org.junit.Test
+
+import java.lang.reflect.Method
+
+import scala.language.existentials
 
 /**
  * This checks whether the streaming Scala API is up to feature parity with the Java API.
- * Implements the {@link ScalaAPICompletenessTest} for streaming.
  */
 class StreamingScalaAPICompletenessTest extends ScalaAPICompletenessTestBase {
 
@@ -40,7 +39,7 @@ class StreamingScalaAPICompletenessTest extends ScalaAPICompletenessTestBase {
       "org.apache.flink.streaming.api.datastream.DataStream.getType",
       "org.apache.flink.streaming.api.datastream.DataStream.copy",
       "org.apache.flink.streaming.api.datastream.DataStream.getTransformation",
-      "org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.copy",
+      "org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.forceNonParallel",
       "org.apache.flink.streaming.api.datastream.ConnectedStreams.getExecutionEnvironment",
       "org.apache.flink.streaming.api.datastream.ConnectedStreams.getExecutionEnvironment",
       "org.apache.flink.streaming.api.datastream.ConnectedStreams.getFirstInput",
@@ -49,8 +48,8 @@ class StreamingScalaAPICompletenessTest extends ScalaAPICompletenessTestBase {
       "org.apache.flink.streaming.api.datastream.ConnectedStreams.getType2",
       "org.apache.flink.streaming.api.datastream.ConnectedStreams.addGeneralWindowCombine",
 
-      "org.apache.flink.streaming.api.datastream.WindowedDataStream.getType",
-      "org.apache.flink.streaming.api.datastream.WindowedDataStream.getExecutionConfig",
+      "org.apache.flink.streaming.api.datastream.WindowedStream.getType",
+      "org.apache.flink.streaming.api.datastream.WindowedStream.getExecutionConfig",
 
       "org.apache.flink.streaming.api.datastream.WindowedStream.getExecutionEnvironment",
       "org.apache.flink.streaming.api.datastream.WindowedStream.getInputType",
@@ -115,11 +114,6 @@ class StreamingScalaAPICompletenessTest extends ScalaAPICompletenessTestBase {
       "ConnectedStreams", "ConnectedStreams",
       classOf[org.apache.flink.streaming.api.datastream.ConnectedStreams[_,_]],
       classOf[ConnectedStreams[_,_]])
-
-    checkMethods(
-      "SplitStream", "SplitStream",
-      classOf[org.apache.flink.streaming.api.datastream.SplitStream[_]],
-      classOf[SplitStream[_]])
 
     checkMethods(
       "WindowedStream", "WindowedStream",

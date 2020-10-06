@@ -65,7 +65,6 @@ docker run -i -t \
   -w ${FLINK_DOC_ROOT} \
   -u "${USER}" \
   -v "${FLINK_DOC_ROOT}:${FLINK_DOC_ROOT}" \
-  -v "/home/${USER_NAME}:/home/${USER_NAME}" \
   -p 4000:4000 \
   ${IMAGE_NAME}-${USER_NAME} \
   bash -c "${CMD}"

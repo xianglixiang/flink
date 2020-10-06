@@ -18,11 +18,10 @@
 
 package org.apache.flink.runtime.io.network.util;
 
-import org.apache.flink.runtime.io.network.api.serialization.EventSerializer;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.io.network.partition.ResultPartition;
-import org.apache.flink.runtime.io.network.partition.consumer.BufferOrEvent;
+import org.apache.flink.runtime.io.network.partition.BufferWritingResultPartition;
+import org.apache.flink.runtime.io.network.util.TestProducerSource.BufferAndChannel;
 
+import java.nio.ByteBuffer;
 import java.util.Random;
 import java.util.concurrent.Callable;
 
@@ -40,7 +39,7 @@ public class TestPartitionProducer implements Callable<Boolean> {
 	public static final int MAX_SLEEP_TIME_MS = 20;
 
 	/** The partition to add data to. */
-	private final ResultPartition partition;
+	private final BufferWritingResultPartition partition;
 
 	/**
 	 * Flag indicating whether the consumer is slow. If true, the consumer will sleep a random
@@ -55,7 +54,7 @@ public class TestPartitionProducer implements Callable<Boolean> {
 	private final Random random;
 
 	public TestPartitionProducer(
-			ResultPartition partition,
+			BufferWritingResultPartition partition,
 			boolean isSlowProducer,
 			TestProducerSource source) {
 
@@ -71,22 +70,11 @@ public class TestPartitionProducer implements Callable<Boolean> {
 		boolean success = false;
 
 		try {
-			BufferOrEvent bufferOrEvent;
+			BufferAndChannel bufferAndChannel;
 
-			while ((bufferOrEvent = source.getNextBufferOrEvent()) != null) {
-				int targetChannelIndex = bufferOrEvent.getChannelIndex();
-
-				if (bufferOrEvent.isBuffer()) {
-					partition.add(bufferOrEvent.getBuffer(), targetChannelIndex);
-				}
-				else if (bufferOrEvent.isEvent()) {
-					final Buffer buffer = EventSerializer.toBuffer(bufferOrEvent.getEvent());
-
-					partition.add(buffer, targetChannelIndex);
-				}
-				else {
-					throw new IllegalStateException("BufferOrEvent instance w/o buffer nor event.");
-				}
+			while ((bufferAndChannel = source.getNextBuffer()) != null) {
+				ByteBuffer record = ByteBuffer.wrap(bufferAndChannel.getBuffer());
+				partition.emitRecord(record, bufferAndChannel.getTargetChannel());
 
 				// Check for interrupted flag after adding data to prevent resource leaks
 				if (Thread.interrupted()) {

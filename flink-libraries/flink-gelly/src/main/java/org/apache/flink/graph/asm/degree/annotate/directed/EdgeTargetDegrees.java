@@ -26,10 +26,7 @@ import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.Vertex;
 import org.apache.flink.graph.asm.degree.annotate.DegreeAnnotationFunctions.JoinEdgeWithVertexDegree;
 import org.apache.flink.graph.asm.degree.annotate.directed.VertexDegrees.Degrees;
-import org.apache.flink.graph.utils.proxy.GraphAlgorithmDelegatingDataSet;
-import org.apache.flink.util.Preconditions;
-
-import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
+import org.apache.flink.graph.utils.proxy.GraphAlgorithmWrappingDataSet;
 
 /**
  * Annotates edges of a directed graph with the degree, out-degree, and
@@ -40,42 +37,7 @@ import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
  * @param <EV> edge value type
  */
 public class EdgeTargetDegrees<K, VV, EV>
-extends GraphAlgorithmDelegatingDataSet<K, VV, EV, Edge<K, Tuple2<EV, Degrees>>> {
-
-	// Optional configuration
-	private int parallelism = PARALLELISM_DEFAULT;
-
-	/**
-	 * Override the operator parallelism.
-	 *
-	 * @param parallelism operator parallelism
-	 * @return this
-	 */
-	public EdgeTargetDegrees<K, VV, EV> setParallelism(int parallelism) {
-		this.parallelism = parallelism;
-
-		return this;
-	}
-
-	@Override
-	protected String getAlgorithmName() {
-		return EdgeTargetDegrees.class.getName();
-	}
-
-	@Override
-	protected boolean mergeConfiguration(GraphAlgorithmDelegatingDataSet other) {
-		Preconditions.checkNotNull(other);
-
-		if (! EdgeTargetDegrees.class.isAssignableFrom(other.getClass())) {
-			return false;
-		}
-
-		EdgeTargetDegrees rhs = (EdgeTargetDegrees) other;
-
-		parallelism = Math.min(parallelism, rhs.parallelism);
-
-		return true;
-	}
+extends GraphAlgorithmWrappingDataSet<K, VV, EV, Edge<K, Tuple2<EV, Degrees>>> {
 
 	@Override
 	public DataSet<Edge<K, Tuple2<EV, Degrees>>> runInternal(Graph<K, VV, EV> input)
@@ -90,7 +52,7 @@ extends GraphAlgorithmDelegatingDataSet<K, VV, EV, Edge<K, Tuple2<EV, Degrees>>>
 			.join(vertexDegrees, JoinHint.REPARTITION_HASH_SECOND)
 			.where(1)
 			.equalTo(0)
-			.with(new JoinEdgeWithVertexDegree<K, EV, Degrees>())
+			.with(new JoinEdgeWithVertexDegree<>())
 				.setParallelism(parallelism)
 				.name("Edge target degrees");
 	}

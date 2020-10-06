@@ -18,22 +18,24 @@
 
 package org.apache.flink.api.java.typeutils.runtime;
 
-import static org.apache.flink.types.Either.Left;
-import static org.apache.flink.types.Either.Right;
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.core.memory.DataOutputView;
+import org.apache.flink.types.Either;
 
 import java.io.IOException;
 
-import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.types.Either;
-import org.apache.flink.core.memory.DataInputView;
-import org.apache.flink.core.memory.DataOutputView;
+import static org.apache.flink.types.Either.Left;
+import static org.apache.flink.types.Either.Right;
 
 /**
- * A {@link TypeSerializer} for the {@ link Either} type of the Java class.
+ * A {@link TypeSerializer} for the {@link Either} type of the Java class.
  *
  * @param <L> the Left value type
  * @param <R> the Right value type
  */
+@Internal
 public class EitherSerializer<L, R> extends TypeSerializer<Either<L, R>> {
 
 	private static final long serialVersionUID = 1L;
@@ -47,9 +49,25 @@ public class EitherSerializer<L, R> extends TypeSerializer<Either<L, R>> {
 		this.rightSerializer = rightSerializer;
 	}
 
+	// ------------------------------------------------------------------------
+	//  Accessors
+	// ------------------------------------------------------------------------
+
+	public TypeSerializer<R> getRightSerializer() {
+		return rightSerializer;
+	}
+
+	public TypeSerializer<L> getLeftSerializer() {
+		return leftSerializer;
+	}
+
+	// ------------------------------------------------------------------------
+	//  TypeSerializer methods
+	// ------------------------------------------------------------------------
+
 	@Override
 	public boolean isImmutableType() {
-		return leftSerializer.isImmutableType() && rightSerializer.isImmutableType();
+		return false;
 	}
 
 	@Override
@@ -89,23 +107,16 @@ public class EitherSerializer<L, R> extends TypeSerializer<Either<L, R>> {
 
 	@Override
 	public Either<L, R> copy(Either<L, R> from, Either<L, R> reuse) {
-		if (from.isRight()) {
-			final R right = from.right();
-			if (reuse.isRight()) {
-				R copyRight = rightSerializer.copy(right, reuse.right());
-				return Right(copyRight);
-			}
-			else {
-				// if the reuse record isn't a right value, we cannot reuse
-				R copyRight = rightSerializer.copy(right);
-				return Right(copyRight);
-			}
-		}
-		else {
-			L left = from.left();
-			// reuse record is never a left value because we always create a right instance
-			L copyLeft = leftSerializer.copy(left);
-			return Left(copyLeft);
+		if (from.isLeft()) {
+			Left<L, R> to = Either.obtainLeft(reuse, leftSerializer);
+			L left = leftSerializer.copy(from.left(), to.left());
+			to.setValue(left);
+			return to;
+		} else {
+			Right<L, R> to = Either.obtainRight(reuse, rightSerializer);
+			R right = rightSerializer.copy(from.right(), to.right());
+			to.setValue(right);
+			return to;
 		}
 	}
 
@@ -140,18 +151,16 @@ public class EitherSerializer<L, R> extends TypeSerializer<Either<L, R>> {
 	@Override
 	public Either<L, R> deserialize(Either<L, R> reuse, DataInputView source) throws IOException {
 		boolean isLeft = source.readBoolean();
-		if (!isLeft) {
-			if (reuse.isRight()) {
-				return Right(rightSerializer.deserialize(reuse.right(), source));
-			}
-			else {
-				// if the reuse record isn't a right value, we cannot reuse
-				return Right(rightSerializer.deserialize(source));
-			}
-		}
-		else {
-			// reuse record is never a left value because we always create a right instance
-			return Left(leftSerializer.deserialize(source));
+		if (isLeft) {
+			Left<L, R> to = Either.obtainLeft(reuse, leftSerializer);
+			L left = leftSerializer.deserialize(to.left(), source);
+			to.setValue(left);
+			return to;
+		} else {
+			Right<L, R> to = Either.obtainRight(reuse, rightSerializer);
+			R right = rightSerializer.deserialize(to.right(), source);
+			to.setValue(right);
+			return to;
 		}
 	}
 
@@ -173,8 +182,7 @@ public class EitherSerializer<L, R> extends TypeSerializer<Either<L, R>> {
 		if (obj instanceof EitherSerializer) {
 			EitherSerializer<L, R> other = (EitherSerializer<L, R>) obj;
 
-			return other.canEqual(this) &&
-				leftSerializer.equals(other.leftSerializer) &&
+			return leftSerializer.equals(other.leftSerializer) &&
 				rightSerializer.equals(other.rightSerializer);
 		} else {
 			return false;
@@ -182,12 +190,16 @@ public class EitherSerializer<L, R> extends TypeSerializer<Either<L, R>> {
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof EitherSerializer;
-	}
-
-	@Override
 	public int hashCode() {
 		return 17 * leftSerializer.hashCode() + rightSerializer.hashCode();
+	}
+
+	// ------------------------------------------------------------------------
+	// Serializer configuration snapshotting & compatibility
+	// ------------------------------------------------------------------------
+
+	@Override
+	public JavaEitherSerializerSnapshot<L, R> snapshotConfiguration() {
+		return new JavaEitherSerializerSnapshot<>(this);
 	}
 }

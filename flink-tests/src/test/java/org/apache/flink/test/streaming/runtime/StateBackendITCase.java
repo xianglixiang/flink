@@ -18,37 +18,49 @@
 
 package org.apache.flink.test.streaming.runtime;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.state.FoldingState;
-import org.apache.flink.api.common.state.FoldingStateDescriptor;
-import org.apache.flink.api.common.state.ListState;
-import org.apache.flink.api.common.state.ListStateDescriptor;
-import org.apache.flink.api.common.state.ReducingState;
-import org.apache.flink.api.common.state.ReducingStateDescriptor;
-import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.core.fs.CloseableRegistry;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.execution.Environment;
-import org.apache.flink.runtime.state.AbstractStateBackend;
-import org.apache.flink.runtime.state.StateHandle;
+import org.apache.flink.runtime.query.TaskKvStateRegistry;
+import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
+import org.apache.flink.runtime.state.CheckpointStorage;
+import org.apache.flink.runtime.state.CompletedCheckpointStorageLocation;
+import org.apache.flink.runtime.state.KeyGroupRange;
+import org.apache.flink.runtime.state.KeyedStateHandle;
+import org.apache.flink.runtime.state.OperatorStateBackend;
+import org.apache.flink.runtime.state.OperatorStateHandle;
+import org.apache.flink.runtime.state.StateBackend;
+import org.apache.flink.runtime.state.memory.MemoryBackendCheckpointStorage;
+import org.apache.flink.runtime.state.ttl.TtlTimeProvider;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
+import org.apache.flink.test.util.AbstractTestBase;
+import org.apache.flink.util.ExceptionUtils;
+
 import org.junit.Test;
 
-import java.io.Serializable;
+import javax.annotation.Nonnull;
 
+import java.io.IOException;
+import java.util.Collection;
+
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-public class StateBackendITCase extends StreamingMultipleProgramsTestBase {
+/**
+ * Integration tests for {@link OperatorStateBackend}.
+ */
+public class StateBackendITCase extends AbstractTestBase {
 
 	/**
 	 * Verify that the user-specified state backend is used even if checkpointing is disabled.
-	 *
-	 * @throws Exception
 	 */
 	@Test
 	public void testStateBackendWithoutCheckpointing() throws Exception {
@@ -59,16 +71,15 @@ public class StateBackendITCase extends StreamingMultipleProgramsTestBase {
 		see.getConfig().setRestartStrategy(RestartStrategies.noRestart());
 		see.setStateBackend(new FailingStateBackend());
 
-
 		see.fromElements(new Tuple2<>("Hello", 1))
 			.keyBy(0)
-			.map(new RichMapFunction<Tuple2<String,Integer>, String>() {
+			.map(new RichMapFunction<Tuple2<String, Integer>, String>() {
 				private static final long serialVersionUID = 1L;
 
 				@Override
 				public void open(Configuration parameters) throws Exception {
 					super.open(parameters);
-					getRuntimeContext().getKeyValueState("test", String.class, "");
+					getRuntimeContext().getState(new ValueStateDescriptor<>("Test", Integer.class));
 				}
 
 				@Override
@@ -77,71 +88,57 @@ public class StateBackendITCase extends StreamingMultipleProgramsTestBase {
 				}
 			})
 			.print();
-		
+
 		try {
 			see.execute();
 			fail();
 		}
 		catch (JobExecutionException e) {
-			Throwable t = e.getCause();
-			if (!(t != null && t.getCause() instanceof SuccessException)) {
-				throw e;
-			}
+			assertTrue(ExceptionUtils.findThrowable(e, SuccessException.class).isPresent());
 		}
 	}
 
-
-	public static class FailingStateBackend extends AbstractStateBackend {
-		
+	private static class FailingStateBackend implements StateBackend {
 		private static final long serialVersionUID = 1L;
 
 		@Override
-		public void initializeForJob(Environment env, String operatorIdentifier, TypeSerializer<?> keySerializer) throws Exception {
+		public CompletedCheckpointStorageLocation resolveCheckpoint(String pointer) throws IOException {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public CheckpointStorage createCheckpointStorage(JobID jobId) throws IOException {
+			return new MemoryBackendCheckpointStorage(jobId, null, null, 1_000_000);
+		}
+
+		@Override
+		public <K> AbstractKeyedStateBackend<K> createKeyedStateBackend(
+			Environment env,
+			JobID jobID,
+			String operatorIdentifier,
+			TypeSerializer<K> keySerializer,
+			int numberOfKeyGroups,
+			KeyGroupRange keyGroupRange,
+			TaskKvStateRegistry kvStateRegistry,
+			TtlTimeProvider ttlTimeProvider,
+			MetricGroup metricGroup,
+			@Nonnull Collection<KeyedStateHandle> stateHandles,
+			CloseableRegistry cancelStreamRegistry) throws IOException {
 			throw new SuccessException();
 		}
 
 		@Override
-		public void disposeAllStateForCurrentJob() throws Exception {}
+		public OperatorStateBackend createOperatorStateBackend(
+			Environment env,
+			String operatorIdentifier,
+			@Nonnull Collection<OperatorStateHandle> stateHandles,
+			CloseableRegistry cancelStreamRegistry) throws Exception {
 
-		@Override
-		public void close() throws Exception {}
-
-		@Override
-		protected <N, T> ValueState<T> createValueState(TypeSerializer<N> namespaceSerializer, ValueStateDescriptor<T> stateDesc) throws Exception {
-			return null;
-		}
-
-		@Override
-		protected <N, T> ListState<T> createListState(TypeSerializer<N> namespaceSerializer, ListStateDescriptor<T> stateDesc) throws Exception {
-			return null;
-		}
-
-		@Override
-		protected <N, T> ReducingState<T> createReducingState(TypeSerializer<N> namespaceSerializer, ReducingStateDescriptor<T> stateDesc) throws Exception {
-			return null;
-		}
-
-		@Override
-		protected <N, T, ACC> FoldingState<T, ACC> createFoldingState(TypeSerializer<N> namespaceSerializer,
-			FoldingStateDescriptor<T, ACC> stateDesc) throws Exception {
-			return null;
-		}
-
-		@Override
-		public CheckpointStateOutputStream createCheckpointStateOutputStream(long checkpointID,
-			long timestamp) throws Exception {
-			return null;
-		}
-
-		@Override
-		public <S extends Serializable> StateHandle<S> checkpointStateSerializable(S state,
-			long checkpointID,
-			long timestamp) throws Exception {
-			return null;
+			throw new SuccessException();
 		}
 	}
 
-	static final class SuccessException extends Exception {
+	static final class SuccessException extends IOException {
 		private static final long serialVersionUID = -9218191172606739598L;
 	}
 

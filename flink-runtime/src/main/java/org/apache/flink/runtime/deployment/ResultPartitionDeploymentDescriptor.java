@@ -18,15 +18,16 @@
 
 package org.apache.flink.runtime.deployment;
 
-import org.apache.flink.runtime.executiongraph.IntermediateResultPartition;
 import org.apache.flink.runtime.io.network.partition.ResultPartition;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
+import org.apache.flink.runtime.shuffle.PartitionDescriptor;
+import org.apache.flink.runtime.shuffle.ShuffleDescriptor;
+import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
 
 import java.io.Serializable;
 
-import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
@@ -36,100 +37,65 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  */
 public class ResultPartitionDeploymentDescriptor implements Serializable {
 
-	/** The ID of the result this partition belongs to. */
-	private final IntermediateDataSetID resultId;
+	private static final long serialVersionUID = 6343547936086963705L;
 
-	/** The ID of the partition. */
-	private final IntermediateResultPartitionID partitionId;
+	private final PartitionDescriptor partitionDescriptor;
 
-	/** The type of the partition. */
-	private final ResultPartitionType partitionType;
+	private final ShuffleDescriptor shuffleDescriptor;
 
-	/** The number of subpartitions. */
-	private final int numberOfSubpartitions;
+	private final int maxParallelism;
 
-	/**
-	 * Flag indicating whether to eagerly deploy consumers.
-	 *
-	 * <p>If <code>true</code>, the consumers are deployed as soon as the
-	 * runtime result is registered at the result manager of the task manager.
-	 */
-	private final boolean eagerlyDeployConsumers;
+	/** Flag whether the result partition should send scheduleOrUpdateConsumer messages. */
+	private final boolean sendScheduleOrUpdateConsumersMessage;
 
 	public ResultPartitionDeploymentDescriptor(
-			IntermediateDataSetID resultId,
-			IntermediateResultPartitionID partitionId,
-			ResultPartitionType partitionType,
-			int numberOfSubpartitions,
-			boolean eagerlyDeployConsumers) {
-
-		this.resultId = checkNotNull(resultId);
-		this.partitionId = checkNotNull(partitionId);
-		this.partitionType = checkNotNull(partitionType);
-
-		checkArgument(numberOfSubpartitions >= 1);
-		this.numberOfSubpartitions = numberOfSubpartitions;
-		this.eagerlyDeployConsumers = eagerlyDeployConsumers;
+			PartitionDescriptor partitionDescriptor,
+			ShuffleDescriptor shuffleDescriptor,
+			int maxParallelism,
+			boolean sendScheduleOrUpdateConsumersMessage) {
+		this.partitionDescriptor = checkNotNull(partitionDescriptor);
+		this.shuffleDescriptor = checkNotNull(shuffleDescriptor);
+		KeyGroupRangeAssignment.checkParallelismPreconditions(maxParallelism);
+		this.maxParallelism = maxParallelism;
+		this.sendScheduleOrUpdateConsumersMessage = sendScheduleOrUpdateConsumersMessage;
 	}
 
 	public IntermediateDataSetID getResultId() {
-		return resultId;
+		return partitionDescriptor.getResultId();
 	}
 
 	public IntermediateResultPartitionID getPartitionId() {
-		return partitionId;
+		return partitionDescriptor.getPartitionId();
 	}
 
 	public ResultPartitionType getPartitionType() {
-		return partitionType;
+		return partitionDescriptor.getPartitionType();
+	}
+
+	public int getTotalNumberOfPartitions() {
+		return partitionDescriptor.getTotalNumberOfPartitions();
 	}
 
 	public int getNumberOfSubpartitions() {
-		return numberOfSubpartitions;
+		return partitionDescriptor.getNumberOfSubpartitions();
 	}
 
-	/**
-	 * Returns whether consumers should be deployed eagerly (as soon as they
-	 * are registered at the result manager of the task manager).
-	 *
-	 * @return Whether consumers should be deployed eagerly
-	 */
-	public boolean getEagerlyDeployConsumers() {
-		return eagerlyDeployConsumers;
+	public int getMaxParallelism() {
+		return maxParallelism;
+	}
+
+	public ShuffleDescriptor getShuffleDescriptor() {
+		return shuffleDescriptor;
+	}
+
+	public boolean sendScheduleOrUpdateConsumersMessage() {
+		return sendScheduleOrUpdateConsumersMessage;
 	}
 
 	@Override
 	public String toString() {
-		return String.format("ResultPartitionDeploymentDescriptor [result id: %s, "
-						+ "partition id: %s, partition type: %s]",
-				resultId, partitionId, partitionType);
-	}
-
-	// ------------------------------------------------------------------------
-
-	public static ResultPartitionDeploymentDescriptor from(IntermediateResultPartition partition) {
-
-		final IntermediateDataSetID resultId = partition.getIntermediateResult().getId();
-		final IntermediateResultPartitionID partitionId = partition.getPartitionId();
-		final ResultPartitionType partitionType = partition.getIntermediateResult().getResultType();
-
-		// The produced data is partitioned among a number of subpartitions.
-		//
-		// If no consumers are known at this point, we use a single subpartition, otherwise we have
-		// one for each consuming sub task.
-		int numberOfSubpartitions = 1;
-
-		if (!partition.getConsumers().isEmpty() && !partition.getConsumers().get(0).isEmpty()) {
-
-			if (partition.getConsumers().size() > 1) {
-				new IllegalStateException("Currently, only a single consumer group per partition is supported.");
-			}
-
-			numberOfSubpartitions = partition.getConsumers().get(0).size();
-		}
-
-		return new ResultPartitionDeploymentDescriptor(
-				resultId, partitionId, partitionType, numberOfSubpartitions,
-				partition.getIntermediateResult().getEagerlyDeployConsumers());
+		return String.format("ResultPartitionDeploymentDescriptor [PartitionDescriptor: %s, "
+						+ "ShuffleDescriptor: %s]",
+			partitionDescriptor, shuffleDescriptor);
 	}
 }

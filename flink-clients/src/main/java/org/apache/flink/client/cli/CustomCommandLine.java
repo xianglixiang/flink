@@ -15,29 +15,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.client.cli;
+
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.util.FlinkException;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Options;
-import org.apache.flink.client.program.ClusterClient;
-import org.apache.flink.configuration.Configuration;
-
 
 /**
  * Custom command-line interface to load hooks for the command-line interface.
  */
-public interface CustomCommandLine<ClusterType extends ClusterClient> {
+public interface CustomCommandLine {
 
 	/**
-	 * Signals whether the custom command-line wants to execute or not
+	 * Signals whether the custom command-line wants to execute or not.
 	 * @param commandLine The command-line options
-	 * @param configuration The Flink configuration
 	 * @return True if the command-line wants to run, False otherwise
 	 */
-	boolean isActive(CommandLine commandLine, Configuration configuration);
+	boolean isActive(CommandLine commandLine);
 
 	/**
-	 * Gets the unique identifier of this CustomCommandLine
+	 * Gets the unique identifier of this CustomCommandLine.
 	 * @return A unique identifier
 	 */
 	String getId();
@@ -50,26 +50,23 @@ public interface CustomCommandLine<ClusterType extends ClusterClient> {
 
 	/**
 	 * Adds custom options to the existing general options.
+	 *
 	 * @param baseOptions The existing options.
 	 */
 	void addGeneralOptions(Options baseOptions);
 
 	/**
-	 * Retrieves a client for a running cluster
-	 * @param commandLine The command-line parameters from the CliFrontend
-	 * @param config The Flink config
-	 * @return Client if a cluster could be retrieved
-	 * @throws UnsupportedOperationException if the operation is not supported
+	 * Override configuration settings by specified command line options.
+	 *
+	 * @param commandLine containing the overriding values
+	 * @return the effective configuration with the overridden configuration settings
 	 */
-	ClusterType retrieveCluster(CommandLine commandLine, Configuration config) throws UnsupportedOperationException;
+	Configuration applyCommandLineOptionsToConfiguration(CommandLine commandLine) throws FlinkException;
 
-	/**
-	 * Creates the client for the cluster
-	 * @param applicationName The application name to use
-	 * @param commandLine The command-line options parsed by the CliFrontend
-	 * @param config The Flink config to use
-	 * @return The client to communicate with the cluster which the CustomCommandLine brought up.
-	 * @throws UnsupportedOperationException if the operation is not supported
-	 */
-	ClusterType createCluster(String applicationName, CommandLine commandLine, Configuration config) throws UnsupportedOperationException;
+	default CommandLine parseCommandLineOptions(String[] args, boolean stopAtNonOptions) throws CliArgsException {
+		final Options options = new Options();
+		addGeneralOptions(options);
+		addRunOptions(options);
+		return CliFrontendParser.parse(options, args, stopAtNonOptions);
+	}
 }

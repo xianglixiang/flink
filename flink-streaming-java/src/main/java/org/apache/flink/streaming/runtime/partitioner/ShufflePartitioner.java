@@ -17,16 +17,16 @@
 
 package org.apache.flink.streaming.runtime.partitioner;
 
-import java.util.Random;
-
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 
+import java.util.Random;
+
 /**
  * Partitioner that distributes the data equally by selecting one output channel
  * randomly.
- * 
+ *
  * @param <T>
  *            Type of the Tuple
  */
@@ -36,13 +36,9 @@ public class ShufflePartitioner<T> extends StreamPartitioner<T> {
 
 	private Random random = new Random();
 
-	private int[] returnArray = new int[1];
-
 	@Override
-	public int[] selectChannels(SerializationDelegate<StreamRecord<T>> record,
-			int numberOfOutputChannels) {
-		returnArray[0] = random.nextInt(numberOfOutputChannels);
-		return returnArray;
+	public int selectChannel(SerializationDelegate<StreamRecord<T>> record) {
+		return random.nextInt(numberOfChannels);
 	}
 
 	@Override

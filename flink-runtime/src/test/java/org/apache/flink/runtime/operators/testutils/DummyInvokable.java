@@ -27,13 +27,12 @@ import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
  */
 public class DummyInvokable extends AbstractInvokable {
 
-	@Override
-	public void invoke() {}
+	public DummyInvokable() {
+		super(new DummyEnvironment("test", 1, 0));
+	}
 
 	@Override
-	public ClassLoader getUserCodeClassLoader() {
-		return getClass().getClassLoader();
-	}
+	public void invoke() {}
 
 	@Override
 	public int getCurrentNumberOfSubtasks() {
@@ -46,11 +45,6 @@ public class DummyInvokable extends AbstractInvokable {
 	}
 
 	@Override
-	public final Configuration getTaskConfiguration() {
-		return new Configuration();
-	}
-
-	@Override
 	public final Configuration getJobConfiguration() {
 		return new Configuration();
 	}
@@ -59,4 +53,5 @@ public class DummyInvokable extends AbstractInvokable {
 	public ExecutionConfig getExecutionConfig() {
 		return new ExecutionConfig();
 	}
+
 }

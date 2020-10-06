@@ -18,12 +18,9 @@
 
 package org.apache.flink.api.common.functions.util;
 
-import java.io.Serializable;
-import java.util.Collections;
-import java.util.Map;
-import java.util.concurrent.Future;
-
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.accumulators.Accumulator;
@@ -34,41 +31,48 @@ import org.apache.flink.api.common.accumulators.IntCounter;
 import org.apache.flink.api.common.accumulators.LongCounter;
 import org.apache.flink.api.common.cache.DistributedCache;
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.api.common.state.AggregatingState;
+import org.apache.flink.api.common.state.AggregatingStateDescriptor;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
-import org.apache.flink.api.common.state.OperatorState;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.state.ReducingState;
 import org.apache.flink.api.common.state.ReducingStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.util.UserCodeClassLoader;
+
+import java.io.Serializable;
+import java.util.Map;
+import java.util.concurrent.Future;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * A standalone implementation of the {@link RuntimeContext}, created by runtime UDF operators.
  */
-@PublicEvolving
+@Internal
 public abstract class AbstractRuntimeUDFContext implements RuntimeContext {
 
 	private final TaskInfo taskInfo;
 
-	private final ClassLoader userCodeClassLoader;
+	private final UserCodeClassLoader userCodeClassLoader;
 
 	private final ExecutionConfig executionConfig;
 
 	private final Map<String, Accumulator<?, ?>> accumulators;
 
 	private final DistributedCache distributedCache;
-	
+
 	private final MetricGroup metrics;
 
 	public AbstractRuntimeUDFContext(TaskInfo taskInfo,
-										ClassLoader userCodeClassLoader,
+										UserCodeClassLoader userCodeClassLoader,
 										ExecutionConfig executionConfig,
-										Map<String, Accumulator<?,?>> accumulators,
+										Map<String, Accumulator<?, ?>> accumulators,
 										Map<String, Future<Path>> cpTasks,
 										MetricGroup metrics) {
 		this.taskInfo = checkNotNull(taskInfo);
@@ -95,10 +99,15 @@ public abstract class AbstractRuntimeUDFContext implements RuntimeContext {
 	}
 
 	@Override
+	public int getMaxNumberOfParallelSubtasks() {
+		return taskInfo.getMaxNumberOfParallelSubtasks();
+	}
+
+	@Override
 	public int getIndexOfThisSubtask() {
 		return taskInfo.getIndexOfThisSubtask();
 	}
-	
+
 	@Override
 	public MetricGroup getMetricGroup() {
 		return metrics;
@@ -150,26 +159,26 @@ public abstract class AbstractRuntimeUDFContext implements RuntimeContext {
 	}
 
 	@Override
-	public Map<String, Accumulator<?, ?>> getAllAccumulators() {
-		return Collections.unmodifiableMap(this.accumulators);
-	}
-	
-	@Override
 	public ClassLoader getUserCodeClassLoader() {
-		return this.userCodeClassLoader;
+		return this.userCodeClassLoader.asClassLoader();
 	}
-	
+
+	@Override
+	public void registerUserCodeClassLoaderReleaseHookIfAbsent(String releaseHookName, Runnable releaseHook) {
+		userCodeClassLoader.registerReleaseHookIfAbsent(releaseHookName, releaseHook);
+	}
+
 	@Override
 	public DistributedCache getDistributedCache() {
 		return this.distributedCache;
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
-	
+
 	@SuppressWarnings("unchecked")
 	private <V, A extends Serializable> Accumulator<V, A> getAccumulator(String name,
-			Class<? extends Accumulator<V, A>> accumulatorClass)
-	{
+			Class<? extends Accumulator<V, A>> accumulatorClass) {
+
 		Accumulator<?, ?> accumulator = accumulators.get(name);
 
 		if (accumulator != null) {
@@ -209,18 +218,22 @@ public abstract class AbstractRuntimeUDFContext implements RuntimeContext {
 	}
 
 	@Override
-	@Deprecated
 	@PublicEvolving
-	public <S> OperatorState<S> getKeyValueState(String name, Class<S> stateType, S defaultState) {
+	public <IN, ACC, OUT> AggregatingState<IN, OUT> getAggregatingState(AggregatingStateDescriptor<IN, ACC, OUT> stateProperties) {
 		throw new UnsupportedOperationException(
 				"This state is only accessible by functions executed on a KeyedStream");
 	}
 
 	@Override
-	@Deprecated
 	@PublicEvolving
-	public <S> OperatorState<S> getKeyValueState(String name, TypeInformation<S> stateType, S defaultState) {
+	public <UK, UV> MapState<UK, UV> getMapState(MapStateDescriptor<UK, UV> stateProperties) {
 		throw new UnsupportedOperationException(
 				"This state is only accessible by functions executed on a KeyedStream");
+	}
+
+	@Internal
+	@VisibleForTesting
+	public String getAllocationIDAsString() {
+		return taskInfo.getAllocationIDAsString();
 	}
 }

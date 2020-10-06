@@ -21,10 +21,10 @@ package org.apache.flink.graph.asm.translate;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
-import org.apache.flink.graph.utils.proxy.GraphAlgorithmDelegatingGraph;
+import org.apache.flink.graph.utils.proxy.GraphAlgorithmWrappingBase;
+import org.apache.flink.graph.utils.proxy.GraphAlgorithmWrappingGraph;
 import org.apache.flink.util.Preconditions;
 
-import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
 import static org.apache.flink.graph.asm.translate.Translate.translateEdgeValues;
 
 /**
@@ -36,13 +36,10 @@ import static org.apache.flink.graph.asm.translate.Translate.translateEdgeValues
  * @param <NEW> new edge value type
  */
 public class TranslateEdgeValues<K, VV, OLD, NEW>
-extends GraphAlgorithmDelegatingGraph<K, VV, OLD, K, VV, NEW> {
+extends GraphAlgorithmWrappingGraph<K, VV, OLD, K, VV, NEW> {
 
 	// Required configuration
-	private TranslateFunction<OLD,NEW> translator;
-
-	// Optional configuration
-	private int parallelism = PARALLELISM_DEFAULT;
+	private TranslateFunction<OLD, NEW> translator;
 
 	/**
 	 * Translate {@link Edge} values using the given {@link TranslateFunction}.
@@ -55,47 +52,15 @@ extends GraphAlgorithmDelegatingGraph<K, VV, OLD, K, VV, NEW> {
 		this.translator = translator;
 	}
 
-	/**
-	 * Override the operator parallelism.
-	 *
-	 * @param parallelism operator parallelism
-	 * @return this
-	 */
-	public TranslateEdgeValues<K, VV, OLD, NEW> setParallelism(int parallelism) {
-		Preconditions.checkArgument(parallelism > 0 || parallelism == PARALLELISM_DEFAULT,
-			"The parallelism must be greater than zero.");
-
-		this.parallelism = parallelism;
-
-		return this;
-	}
-
 	@Override
-	protected String getAlgorithmName() {
-		return TranslateEdgeValues.class.getName();
-	}
-
-	@Override
-	protected boolean mergeConfiguration(GraphAlgorithmDelegatingGraph other) {
-		Preconditions.checkNotNull(other);
-
-		if (! TranslateEdgeValues.class.isAssignableFrom(other.getClass())) {
+	protected boolean canMergeConfigurationWith(GraphAlgorithmWrappingBase other) {
+		if (!super.canMergeConfigurationWith(other)) {
 			return false;
 		}
 
 		TranslateEdgeValues rhs = (TranslateEdgeValues) other;
 
-		// verify that configurations can be merged
-
-		if (translator != rhs.translator) {
-			return false;
-		}
-
-		// merge configurations
-
-		parallelism = Math.min(parallelism, rhs.parallelism);
-
-		return true;
+		return translator == rhs.translator;
 	}
 
 	@Override

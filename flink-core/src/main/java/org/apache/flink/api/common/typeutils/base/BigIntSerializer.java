@@ -18,11 +18,14 @@
 
 package org.apache.flink.api.common.typeutils.base;
 
-import java.io.IOException;
-import java.math.BigInteger;
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
+
+import java.io.IOException;
+import java.math.BigInteger;
 
 /**
  * Serializer for serializing/deserializing BigInteger values including null values.
@@ -79,11 +82,6 @@ public final class BigIntSerializer extends TypeSerializerSingleton<BigInteger> 
 		copyBigInteger(source, target);
 	}
 
-	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof BigIntSerializer;
-	}
-
 	// --------------------------------------------------------------------------------------------
 	//                           Static Helpers for BigInteger Serialization
 	// --------------------------------------------------------------------------------------------
@@ -130,7 +128,7 @@ public final class BigIntSerializer extends TypeSerializerSingleton<BigInteger> 
 			}
 		}
 		final byte[] bytes = new byte[len - 4];
-		source.read(bytes);
+		source.readFully(bytes);
 		return new BigInteger(bytes);
 	}
 
@@ -141,5 +139,23 @@ public final class BigIntSerializer extends TypeSerializerSingleton<BigInteger> 
 			target.write(source, len - 4);
 		}
 		return len == 0; // returns true if the copied record was null
+	}
+
+	@Override
+	public TypeSerializerSnapshot<BigInteger> snapshotConfiguration() {
+		return new BigIntSerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class BigIntSerializerSnapshot extends SimpleTypeSerializerSnapshot<BigInteger> {
+
+		public BigIntSerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

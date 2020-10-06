@@ -23,6 +23,11 @@ import org.apache.flink.api.java.CollectionEnvironment;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.ExecutionEnvironmentFactory;
 
+/**
+ * A {@link CollectionEnvironment} to be used in tests. The predominant feature of this class is that it allows setting
+ * it as a context environment, causing it to be returned by {@link ExecutionEnvironment#getExecutionEnvironment()}.
+ * This also allows retrieving the {@link JobExecutionResult} outside the actual program.
+ */
 public class CollectionTestEnvironment extends CollectionEnvironment {
 
 	private CollectionTestEnvironment lastEnv = null;
@@ -35,11 +40,6 @@ public class CollectionTestEnvironment extends CollectionEnvironment {
 		else {
 			return lastEnv.getLastJobExecutionResult();
 		}
-	}
-
-	@Override
-	public JobExecutionResult execute() throws Exception {
-		return execute("test job");
 	}
 
 	@Override
@@ -59,5 +59,9 @@ public class CollectionTestEnvironment extends CollectionEnvironment {
 		};
 
 		initializeContextEnvironment(factory);
+	}
+
+	protected static void unsetAsContext() {
+		resetContextEnvironment();
 	}
 }

@@ -19,22 +19,31 @@
 package org.apache.flink.runtime.execution;
 
 import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.metrics.groups.TaskMetricGroup;
 import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
 import org.apache.flink.runtime.broadcast.BroadcastVariableManager;
+import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
+import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
+import org.apache.flink.runtime.externalresource.ExternalResourceInfoProvider;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
+import org.apache.flink.runtime.io.network.TaskEventDispatcher;
 import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
-import org.apache.flink.runtime.io.network.partition.consumer.InputGate;
-import org.apache.flink.api.common.JobID;
+import org.apache.flink.runtime.io.network.partition.consumer.IndexedInputGate;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.InputSplitProvider;
+import org.apache.flink.runtime.jobgraph.tasks.TaskOperatorEventGateway;
 import org.apache.flink.runtime.memory.MemoryManager;
-import org.apache.flink.runtime.state.StateHandle;
+import org.apache.flink.runtime.metrics.groups.TaskMetricGroup;
+import org.apache.flink.runtime.query.TaskKvStateRegistry;
+import org.apache.flink.runtime.state.TaskStateManager;
+import org.apache.flink.runtime.state.internal.InternalKvState;
+import org.apache.flink.runtime.taskexecutor.GlobalAggregateManager;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
+import org.apache.flink.util.UserCodeClassLoader;
 
 import java.util.Map;
 import java.util.concurrent.Future;
@@ -76,7 +85,7 @@ public interface Environment {
 	ExecutionAttemptID getExecutionId();
 
 	/**
-	 * Returns the task-wide configuration object, originally attache to the job vertex.
+	 * Returns the task-wide configuration object, originally attached to the job vertex.
 	 *
 	 * @return The task-wide configuration
 	 */
@@ -119,6 +128,11 @@ public interface Environment {
 	InputSplitProvider getInputSplitProvider();
 
 	/**
+	 * Gets the gateway through which operators can send events to the operator coordinators.
+	 */
+	TaskOperatorEventGateway getOperatorCoordinatorEventGateway();
+
+	/**
 	 * Returns the current {@link IOManager}.
 	 *
 	 * @return the current {@link IOManager}.
@@ -135,11 +149,22 @@ public interface Environment {
 	/**
 	 * Returns the user code class loader
 	 */
-	ClassLoader getUserClassLoader();
+	UserCodeClassLoader getUserCodeClassLoader();
 
 	Map<String, Future<Path>> getDistributedCacheEntries();
 
 	BroadcastVariableManager getBroadcastVariableManager();
+
+	TaskStateManager getTaskStateManager();
+
+	GlobalAggregateManager getGlobalAggregateManager();
+
+	/**
+	 * Get the {@link ExternalResourceInfoProvider} which contains infos of available external resources.
+	 *
+	 * @return {@link ExternalResourceInfoProvider} which contains infos of available external resources
+	 */
+	ExternalResourceInfoProvider getExternalResourceInfoProvider();
 
 	/**
 	 * Return the registry for accumulators which are periodically sent to the job manager.
@@ -148,23 +173,41 @@ public interface Environment {
 	AccumulatorRegistry getAccumulatorRegistry();
 
 	/**
+	 * Returns the registry for {@link InternalKvState} instances.
+	 *
+	 * @return KvState registry
+	 */
+	TaskKvStateRegistry getTaskKvStateRegistry();
+
+	/**
 	 * Confirms that the invokable has successfully completed all steps it needed to
 	 * to for the checkpoint with the give checkpoint-ID. This method does not include
 	 * any state in the checkpoint.
 	 * 
-	 * @param checkpointId The ID of the checkpoint.
+	 * @param checkpointId ID of this checkpoint
+	 * @param checkpointMetrics metrics for this checkpoint
 	 */
-	void acknowledgeCheckpoint(long checkpointId);
+	void acknowledgeCheckpoint(long checkpointId, CheckpointMetrics checkpointMetrics);
 
 	/**
-	 * Confirms that the invokable has successfully completed all steps it needed to
-	 * to for the checkpoint with the give checkpoint-ID. This method does include
+	 * Confirms that the invokable has successfully completed all required steps for
+	 * the checkpoint with the give checkpoint-ID. This method does include
 	 * the given state in the checkpoint.
 	 *
-	 * @param checkpointId The ID of the checkpoint.
-	 * @param state A handle to the state to be included in the checkpoint.   
+	 * @param checkpointId ID of this checkpoint
+	 * @param checkpointMetrics metrics for this checkpoint
+	 * @param subtaskState All state handles for the checkpointed state
 	 */
-	void acknowledgeCheckpoint(long checkpointId, StateHandle<?> state);
+	void acknowledgeCheckpoint(long checkpointId, CheckpointMetrics checkpointMetrics, TaskStateSnapshot subtaskState);
+
+	/**
+	 * Declines a checkpoint. This tells the checkpoint coordinator that this task will
+	 * not be able to successfully complete a certain checkpoint.
+	 * 
+	 * @param checkpointId The ID of the declined checkpoint.
+	 * @param cause An optional reason why the checkpoint was declined.
+	 */
+	void declineCheckpoint(long checkpointId, Throwable cause);
 
 	/**
 	 * Marks task execution failed for an external reason (a reason other than the task code itself
@@ -173,7 +216,7 @@ public interface Environment {
 	 * Otherwise it sets the state to FAILED, and, if the invokable code is running,
 	 * starts an asynchronous thread that aborts that code.
 	 *
-	 * <p>This method never blocks.</p>
+	 * <p>This method never blocks.
 	 */
 	void failExternally(Throwable cause);
 
@@ -185,7 +228,9 @@ public interface Environment {
 
 	ResultPartitionWriter[] getAllWriters();
 
-	InputGate getInputGate(int index);
+	IndexedInputGate getInputGate(int index);
 
-	InputGate[] getAllInputGates();
+	IndexedInputGate[] getAllInputGates();
+
+	TaskEventDispatcher getTaskEventDispatcher();
 }

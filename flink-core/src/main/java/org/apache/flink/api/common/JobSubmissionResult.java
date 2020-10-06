@@ -26,7 +26,7 @@ import org.apache.flink.annotation.Public;
 @Public
 public class JobSubmissionResult {
 
-	private JobID jobID;
+	private final JobID jobID;
 
 	public JobSubmissionResult(JobID jobID) {
 		this.jobID = jobID;
@@ -47,7 +47,7 @@ public class JobSubmissionResult {
 	 * @return True if this is a JobExecutionResult, false otherwise
 	 */
 	public boolean isJobExecutionResult() {
-		return this instanceof JobExecutionResult;
+		return false;
 	}
 
 	/**
@@ -56,10 +56,6 @@ public class JobSubmissionResult {
 	 * @throws ClassCastException if this is not a JobExecutionResult
 	 */
 	public JobExecutionResult getJobExecutionResult() {
-		if (isJobExecutionResult()) {
-			return (JobExecutionResult) this;
-		} else {
-			throw new ClassCastException("This JobSubmissionResult is not a JobExecutionResult.");
-		}
+		throw new ClassCastException("This JobSubmissionResult is not a JobExecutionResult.");
 	}
 }

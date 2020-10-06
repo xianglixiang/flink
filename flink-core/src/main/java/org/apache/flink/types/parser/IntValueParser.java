@@ -36,6 +36,12 @@ public class IntValueParser extends FieldParser<IntValue> {
 	
 	@Override
 	public int parseField(byte[] bytes, int startPos, int limit, byte[] delimiter, IntValue reusable) {
+
+		if (startPos == limit) {
+			setErrorState(ParseErrorState.EMPTY_COLUMN);
+			return -1;
+		}
+
 		long val = 0;
 		boolean neg = false;
 
@@ -57,7 +63,7 @@ public class IntValueParser extends FieldParser<IntValue> {
 		for (int i = startPos; i < limit; i++) {
 			if (i < delimLimit && delimiterNext(bytes, i, delimiter)) {
 				if (i == startPos) {
-					setErrorState(ParseErrorState.EMPTY_STRING);
+					setErrorState(ParseErrorState.EMPTY_COLUMN);
 					return -1;
 				}
 				reusable.setValue((int) (neg ? -val : val));
@@ -75,7 +81,7 @@ public class IntValueParser extends FieldParser<IntValue> {
 				return -1;
 			}
 		}
-		
+
 		reusable.setValue((int) (neg ? -val : val));
 		return limit;
 	}

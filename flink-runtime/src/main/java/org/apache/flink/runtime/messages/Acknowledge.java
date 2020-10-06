@@ -18,10 +18,12 @@
 
 package org.apache.flink.runtime.messages;
 
+import java.io.Serializable;
+
 /**
  * A generic acknowledgement message.
  */
-public class Acknowledge implements RequiresLeaderSessionID, java.io.Serializable {
+public class Acknowledge implements Serializable {
 
 	private static final long serialVersionUID = 7808628311617273755L;
 
@@ -60,8 +62,9 @@ public class Acknowledge implements RequiresLeaderSessionID, java.io.Serializabl
 
 	/**
 	 * Read resolve to preserve the singleton object property.
+	 * (per best practices, this should have visibility 'protected')
 	 */
-	private Object readResolve() throws java.io.ObjectStreamException {
+	protected Object readResolve() throws java.io.ObjectStreamException {
 		return INSTANCE;
 	}
 }

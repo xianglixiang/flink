@@ -17,11 +17,16 @@
 
 package org.apache.flink.streaming.api.graph;
 
-import java.io.Serializable;
-import java.util.List;
-
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.streaming.api.transformations.ShuffleMode;
 import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
+import org.apache.flink.util.OutputTag;
+
+import java.io.Serializable;
+import java.util.Objects;
+
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * An edge in the streaming topology. One edge like this does not necessarily
@@ -33,70 +38,137 @@ public class StreamEdge implements Serializable {
 
 	private static final long serialVersionUID = 1L;
 
-	final private String edgeId;
+	private static final long ALWAYS_FLUSH_BUFFER_TIMEOUT = 0L;
 
-	final private StreamNode sourceVertex;
-	final private StreamNode targetVertex;
+	private final String edgeId;
+
+	private final int sourceId;
+	private final int targetId;
 
 	/**
 	 * The type number of the input for co-tasks.
 	 */
-	final private int typeNumber;
+	private final int typeNumber;
+	/**
+	 * The side-output tag (if any) of this {@link StreamEdge}.
+	 */
+	private final OutputTag outputTag;
 
 	/**
-	 * A list of output names that the target vertex listens to (if there is
-	 * output selection).
+	 * The {@link StreamPartitioner} on this {@link StreamEdge}.
 	 */
-	private final List<String> selectedNames;
 	private StreamPartitioner<?> outputPartitioner;
 
-	public StreamEdge(StreamNode sourceVertex, StreamNode targetVertex, int typeNumber,
-			List<String> selectedNames, StreamPartitioner<?> outputPartitioner) {
-		this.sourceVertex = sourceVertex;
-		this.targetVertex = targetVertex;
+	/**
+	 * The name of the operator in the source vertex.
+	 */
+	private final String sourceOperatorName;
+
+	/**
+	 * The name of the operator in the target vertex.
+	 */
+	private final String targetOperatorName;
+
+	private final ShuffleMode shuffleMode;
+
+	private long bufferTimeout;
+
+	public StreamEdge(
+		StreamNode sourceVertex,
+		StreamNode targetVertex,
+		int typeNumber,
+		StreamPartitioner<?> outputPartitioner,
+		OutputTag outputTag) {
+
+		this(
+			sourceVertex,
+			targetVertex,
+			typeNumber,
+			ALWAYS_FLUSH_BUFFER_TIMEOUT,
+			outputPartitioner,
+			outputTag,
+			ShuffleMode.UNDEFINED);
+	}
+
+	public StreamEdge(
+		StreamNode sourceVertex,
+		StreamNode targetVertex,
+		int typeNumber,
+		StreamPartitioner<?> outputPartitioner,
+		OutputTag outputTag,
+		ShuffleMode shuffleMode) {
+
+		this(
+			sourceVertex,
+			targetVertex,
+			typeNumber,
+			sourceVertex.getBufferTimeout(),
+			outputPartitioner,
+			outputTag,
+			shuffleMode);
+	}
+
+	public StreamEdge(
+		StreamNode sourceVertex,
+		StreamNode targetVertex,
+		int typeNumber,
+		long bufferTimeout,
+		StreamPartitioner<?> outputPartitioner,
+		OutputTag outputTag,
+		ShuffleMode shuffleMode) {
+
+		this.sourceId = sourceVertex.getId();
+		this.targetId = targetVertex.getId();
 		this.typeNumber = typeNumber;
-		this.selectedNames = selectedNames;
+		this.bufferTimeout = bufferTimeout;
 		this.outputPartitioner = outputPartitioner;
-
-		this.edgeId = sourceVertex + "_" + targetVertex + "_" + typeNumber + "_" + selectedNames
-				+ "_" + outputPartitioner;
-	}
-
-	public StreamNode getSourceVertex() {
-		return sourceVertex;
-	}
-
-	public StreamNode getTargetVertex() {
-		return targetVertex;
+		this.outputTag = outputTag;
+		this.sourceOperatorName = sourceVertex.getOperatorName();
+		this.targetOperatorName = targetVertex.getOperatorName();
+		this.shuffleMode = checkNotNull(shuffleMode);
+		this.edgeId = sourceVertex + "_" + targetVertex + "_" + typeNumber  + "_" + outputPartitioner;
 	}
 
 	public int getSourceId() {
-		return sourceVertex.getId();
+		return sourceId;
 	}
 
 	public int getTargetId() {
-		return targetVertex.getId();
+		return targetId;
 	}
 
 	public int getTypeNumber() {
 		return typeNumber;
 	}
 
-	public List<String> getSelectedNames() {
-		return selectedNames;
+	public OutputTag getOutputTag() {
+		return this.outputTag;
 	}
 
 	public StreamPartitioner<?> getPartitioner() {
 		return outputPartitioner;
 	}
-	
+
+	public ShuffleMode getShuffleMode() {
+		return shuffleMode;
+	}
+
 	public void setPartitioner(StreamPartitioner<?> partitioner) {
 		this.outputPartitioner = partitioner;
 	}
 
+	public void setBufferTimeout(long bufferTimeout) {
+		checkArgument(bufferTimeout >= -1);
+		this.bufferTimeout = bufferTimeout;
+	}
+
+	public long getBufferTimeout() {
+		return bufferTimeout;
+	}
+
 	@Override
 	public int hashCode() {
-		return edgeId.hashCode();
+		return Objects.hash(edgeId, outputTag);
 	}
 
 	@Override
@@ -109,14 +181,14 @@ public class StreamEdge implements Serializable {
 		}
 
 		StreamEdge that = (StreamEdge) o;
-
-		return edgeId.equals(that.edgeId);
+		return Objects.equals(edgeId, that.edgeId) &&
+			Objects.equals(outputTag, that.outputTag);
 	}
 
 	@Override
 	public String toString() {
-		return "(" + sourceVertex + " -> " + targetVertex + ", typeNumber=" + typeNumber
-				+ ", selectedNames=" + selectedNames + ", outputPartitioner=" + outputPartitioner
-				+ ')';
+		return "(" + (sourceOperatorName + "-" + sourceId) + " -> " + (targetOperatorName + "-" + targetId)
+			+ ", typeNumber=" + typeNumber + ", outputPartitioner=" + outputPartitioner
+			+ ", bufferTimeout=" + bufferTimeout + ", outputTag=" + outputTag + ')';
 	}
 }

@@ -28,10 +28,10 @@ import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.streaming.api.graph.StreamNode;
+import org.apache.flink.util.TestLogger;
 
 import org.junit.Test;
 
@@ -52,7 +52,7 @@ import static org.junit.Assert.assertTrue;
  * {@link JobGraph} instances.
  */
 @SuppressWarnings("serial")
-public class StreamingJobGraphGeneratorNodeHashTest {
+public class StreamingJobGraphGeneratorNodeHashTest extends TestLogger {
 
 	// ------------------------------------------------------------------------
 	// Deterministic hash assignment
@@ -91,7 +91,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 		src0.map(new NoOpMapFunction())
 				.union(src1, src2)
-				.addSink(new NoOpSinkFunction()).name("sink");
+				.addSink(new DiscardingSink<>()).name("sink");
 
 		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
 
@@ -118,58 +118,11 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 		src0.map(new NoOpMapFunction())
 				.union(src1, src2)
-				.addSink(new NoOpSinkFunction()).name("sink");
+				.addSink(new DiscardingSink<>()).name("sink");
 
 		jobGraph = env.getStreamGraph().getJobGraph();
 
 		verifyIdsEqual(jobGraph, ids);
-	}
-
-	/**
-	 * Verifies that parallelism affects the node hash.
-	 */
-	@Test
-	public void testNodeHashParallelism() throws Exception {
-		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
-		env.disableOperatorChaining();
-
-		env.addSource(new NoOpSourceFunction(), "src").setParallelism(4)
-				.addSink(new DiscardingSink<String>()).name("sink").setParallelism(4);
-
-		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
-
-		Map<JobVertexID, String> ids = rememberIds(jobGraph);
-
-		// Change parallelism of source
-		env = StreamExecutionEnvironment.createLocalEnvironment();
-		env.disableOperatorChaining();
-
-		env.addSource(new NoOpSourceFunction(), "src").setParallelism(8)
-				.addSink(new DiscardingSink<String>()).name("sink").setParallelism(4);
-
-		jobGraph = env.getStreamGraph().getJobGraph();
-
-		verifyIdsNotEqual(jobGraph, ids);
-
-		// Change parallelism of sink
-		env = StreamExecutionEnvironment.createLocalEnvironment();
-		env.disableOperatorChaining();
-
-		env.addSource(new NoOpSourceFunction(), "src").setParallelism(4)
-				.addSink(new DiscardingSink<String>()).name("sink").setParallelism(8);
-
-		jobGraph = env.getStreamGraph().getJobGraph();
-
-		// The source hash will should be the same
-		JobVertex[] vertices = jobGraph.getVerticesAsArray();
-		if (vertices[0].isInputVertex()) {
-			assertTrue(ids.containsKey(vertices[0].getID()));
-			assertFalse(ids.containsKey(vertices[1].getID()));
-		}
-		else {
-			assertTrue(ids.containsKey(vertices[1].getID()));
-			assertFalse(ids.containsKey(vertices[0].getID()));
-		}
 	}
 
 	/**
@@ -190,7 +143,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 		DataStream<String> src0 = env.addSource(new NoOpSourceFunction());
 		DataStream<String> src1 = env.addSource(new NoOpSourceFunction());
 
-		src0.union(src1).addSink(new NoOpSinkFunction());
+		src0.union(src1).addSink(new DiscardingSink<>());
 
 		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
 
@@ -212,7 +165,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 	 * B (unchained): [ (src0) ] -> [ (map) -> (filter) -> (sink) ]
 	 * </pre>
 	 *
-	 * The hashes for the single vertex in A and the source vertex in B need to be different.
+	 * <p>The hashes for the single vertex in A and the source vertex in B need to be different.
 	 */
 	@Test
 	public void testNodeHashAfterSourceUnchaining() throws Exception {
@@ -222,7 +175,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 		env.addSource(new NoOpSourceFunction())
 				.map(new NoOpMapFunction())
 				.filter(new NoOpFilterFunction())
-				.addSink(new NoOpSinkFunction());
+				.addSink(new DiscardingSink<>());
 
 		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
 
@@ -236,7 +189,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 				.map(new NoOpMapFunction())
 				.startNewChain()
 				.filter(new NoOpFilterFunction())
-				.addSink(new NoOpSinkFunction());
+				.addSink(new DiscardingSink<>());
 
 		jobGraph = env.getStreamGraph().getJobGraph();
 
@@ -254,7 +207,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 	 * B (unchained): [ (src0) ] -> [ (map) -> (filter) -> (sink) ]
 	 * </pre>
 	 *
-	 * The hashes for the single vertex in A and the source vertex in B need to be different.
+	 * <p>The hashes for the single vertex in A and the source vertex in B need to be different.
 	 */
 	@Test
 	public void testNodeHashAfterIntermediateUnchaining() throws Exception {
@@ -265,7 +218,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 				.map(new NoOpMapFunction()).name("map")
 				.startNewChain()
 				.filter(new NoOpFilterFunction())
-				.addSink(new NoOpSinkFunction());
+				.addSink(new DiscardingSink<>());
 
 		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
 
@@ -281,7 +234,7 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 				.startNewChain()
 				.filter(new NoOpFilterFunction())
 				.startNewChain()
-				.addSink(new NoOpSinkFunction());
+				.addSink(new DiscardingSink<>());
 
 		jobGraph = env.getStreamGraph().getJobGraph();
 
@@ -310,9 +263,9 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 		DataStream<String> src = env.addSource(new NoOpSourceFunction());
 
-		src.map(new NoOpMapFunction()).addSink(new NoOpSinkFunction());
+		src.map(new NoOpMapFunction()).addSink(new DiscardingSink<>());
 
-		src.map(new NoOpMapFunction()).addSink(new NoOpSinkFunction());
+		src.map(new NoOpMapFunction()).addSink(new DiscardingSink<>());
 
 		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
 		Set<JobVertexID> vertexIds = new HashSet<>();
@@ -370,11 +323,11 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 				.name("source").uid("source");
 
 		src.map(new NoOpMapFunction())
-				.addSink(new NoOpSinkFunction())
+				.addSink(new DiscardingSink<>())
 				.name("sink0").uid("sink0");
 
 		src.map(new NoOpMapFunction())
-				.addSink(new NoOpSinkFunction())
+				.addSink(new DiscardingSink<>())
 				.name("sink1").uid("sink1");
 
 		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
@@ -396,13 +349,13 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 		src.map(new NoOpMapFunction())
 				.keyBy(new NoOpKeySelector())
 				.reduce(new NoOpReduceFunction())
-				.addSink(new NoOpSinkFunction())
+				.addSink(new DiscardingSink<>())
 				.name("sink0").uid("sink0");
 
 		src.map(new NoOpMapFunction())
 				.keyBy(new NoOpKeySelector())
 				.reduce(new NoOpReduceFunction())
-				.addSink(new NoOpSinkFunction())
+				.addSink(new DiscardingSink<>())
 				.name("sink1").uid("sink1");
 
 		JobGraph newJobGraph = env.getStreamGraph().getJobGraph();
@@ -430,33 +383,30 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 		env.addSource(new NoOpSourceFunction()).uid("source")
 				.map(new NoOpMapFunction()).uid("source") // Collision
-				.addSink(new NoOpSinkFunction());
+				.addSink(new DiscardingSink<>());
 
 		// This call is necessary to generate the job graph
 		env.getStreamGraph().getJobGraph();
 	}
 
 	/**
-	 * Tests that a manual hash for an intermediate chain node throws an Exception.
+	 * Tests that a manual hash for an intermediate chain node is accepted.
 	 */
-	@Test(expected = UnsupportedOperationException.class)
-	public void testManualHashAssignmentForIntermediateNodeInChainThrowsException() throws Exception {
+	@Test
+	public void testManualHashAssignmentForIntermediateNodeInChain() throws Exception {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
 		env.setParallelism(4);
 
 		env.addSource(new NoOpSourceFunction())
 				// Intermediate chained node
 				.map(new NoOpMapFunction()).uid("map")
-				.addSink(new NoOpSinkFunction());
+				.addSink(new DiscardingSink<>());
 
 		env.getStreamGraph().getJobGraph();
 	}
 
 	/**
 	 * Tests that a manual hash at the beginning of a chain is accepted.
-	 *
-	 * <p>This should work, because the ID is used at the beginning of a chain. This is currently
-	 * not allowed for intermediate nodes (see {@link #testManualHashAssignmentForIntermediateNodeInChainThrowsException()}).
 	 */
 	@Test
 	public void testManualHashAssignmentForStartNodeInInChain() throws Exception {
@@ -465,9 +415,68 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 		env.addSource(new NoOpSourceFunction()).uid("source")
 				.map(new NoOpMapFunction())
-				.addSink(new NoOpSinkFunction());
+				.addSink(new DiscardingSink<>());
 
 		env.getStreamGraph().getJobGraph();
+	}
+
+	@Test
+	public void testUserProvidedHashingOnChainSupported() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+
+		env.addSource(new NoOpSourceFunction(), "src").setUidHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+				.map(new NoOpMapFunction()).setUidHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+				.filter(new NoOpFilterFunction()).setUidHash("cccccccccccccccccccccccccccccccc")
+				.keyBy(new NoOpKeySelector())
+				.reduce(new NoOpReduceFunction()).name("reduce").setUidHash("dddddddddddddddddddddddddddddddd");
+
+		env.getStreamGraph().getJobGraph();
+	}
+
+	@Test(expected = IllegalStateException.class)
+	public void testDisablingAutoUidsFailsStreamGraphCreation() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+		env.getConfig().disableAutoGeneratedUIDs();
+
+		env.addSource(new NoOpSourceFunction()).addSink(new DiscardingSink<>());
+		env.getStreamGraph();
+	}
+
+	@Test
+	public void testDisablingAutoUidsAcceptsManuallySetId() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+		env.getConfig().disableAutoGeneratedUIDs();
+
+		env
+			.addSource(new NoOpSourceFunction()).uid("uid1")
+			.addSink(new DiscardingSink<>()).uid("uid2");
+
+		env.getStreamGraph();
+	}
+
+	@Test
+	public void testDisablingAutoUidsAcceptsManuallySetHash() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+		env.getConfig().disableAutoGeneratedUIDs();
+
+		env
+			.addSource(new NoOpSourceFunction()).setUidHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+			.addSink(new DiscardingSink<>()).setUidHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+
+		env.getStreamGraph();
+	}
+
+	@Test
+	public void testDisablingAutoUidsWorksWithKeyBy() throws Exception {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+		env.getConfig().disableAutoGeneratedUIDs();
+
+		env
+			.addSource(new NoOpSourceFunction()).setUidHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+			.keyBy(o -> o)
+			.addSink(new DiscardingSink<>()).setUidHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+
+		env.getStreamGraph();
 	}
 
 	// ------------------------------------------------------------------------
@@ -516,6 +525,8 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 	private static class NoOpSourceFunction implements ParallelSourceFunction<String> {
 
+		private static final long serialVersionUID = -5459224792698512636L;
+
 		@Override
 		public void run(SourceContext<String> ctx) throws Exception {
 		}
@@ -525,14 +536,9 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 		}
 	}
 
-	private static class NoOpSinkFunction implements SinkFunction<String> {
-
-		@Override
-		public void invoke(String value) throws Exception {
-		}
-	}
-
 	private static class NoOpMapFunction implements MapFunction<String, String> {
+
+		private static final long serialVersionUID = 6584823409744624276L;
 
 		@Override
 		public String map(String value) throws Exception {
@@ -542,6 +548,8 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 	private static class NoOpFilterFunction implements FilterFunction<String> {
 
+		private static final long serialVersionUID = 500005424900187476L;
+
 		@Override
 		public boolean filter(String value) throws Exception {
 			return true;
@@ -550,6 +558,8 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 
 	private static class NoOpKeySelector implements KeySelector<String, String> {
 
+		private static final long serialVersionUID = -96127515593422991L;
+
 		@Override
 		public String getKey(String value) throws Exception {
 			return value;
@@ -557,6 +567,8 @@ public class StreamingJobGraphGeneratorNodeHashTest {
 	}
 
 	private static class NoOpReduceFunction implements ReduceFunction<String> {
+		private static final long serialVersionUID = -8775747640749256372L;
+
 		@Override
 		public String reduce(String value1, String value2) throws Exception {
 			return value1;

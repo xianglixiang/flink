@@ -18,8 +18,12 @@
 
 package org.apache.flink.runtime.checkpoint;
 
+import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.runtime.zookeeper.ZooKeeperTestEnvironment;
 import org.apache.flink.util.TestLogger;
+
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.CuratorFramework;
+
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.Test;
@@ -35,6 +39,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 public abstract class CheckpointIDCounterTest extends TestLogger {
 
@@ -54,9 +60,7 @@ public abstract class CheckpointIDCounterTest extends TestLogger {
 
 		@AfterClass
 		public static void tearDown() throws Exception {
-			if (ZooKeeper != null) {
-				ZooKeeper.shutdown();
-			}
+			ZooKeeper.shutdown();
 		}
 
 		@Before
@@ -64,10 +68,42 @@ public abstract class CheckpointIDCounterTest extends TestLogger {
 			ZooKeeper.deleteAll();
 		}
 
+		/**
+		 * Tests that counter node is removed from ZooKeeper after shutdown.
+		 */
+		@Test
+		public void testShutdownRemovesState() throws Exception {
+			CheckpointIDCounter counter = createCompletedCheckpoints();
+			counter.start();
+
+			CuratorFramework client = ZooKeeper.getClient();
+			assertNotNull(client.checkExists().forPath("/checkpoint-id-counter"));
+
+			counter.shutdown(JobStatus.FINISHED);
+			assertNull(client.checkExists().forPath("/checkpoint-id-counter"));
+		}
+
+		/**
+		 * Tests that counter node is NOT removed from ZooKeeper after suspend.
+		 */
+		@Test
+		public void testSuspendKeepsState() throws Exception {
+			CheckpointIDCounter counter = createCompletedCheckpoints();
+			counter.start();
+
+			CuratorFramework client = ZooKeeper.getClient();
+			assertNotNull(client.checkExists().forPath("/checkpoint-id-counter"));
+
+			counter.shutdown(JobStatus.SUSPENDED);
+			assertNotNull(client.checkExists().forPath("/checkpoint-id-counter"));
+		}
+
 		@Override
 		protected CheckpointIDCounter createCompletedCheckpoints() throws Exception {
-			return new ZooKeeperCheckpointIDCounter(ZooKeeper.getClient(),
-					"/checkpoint-id-counter");
+			return new ZooKeeperCheckpointIDCounter(
+				ZooKeeper.getClient(),
+				"/checkpoint-id-counter",
+				new DefaultLastStateConnectionStateListener());
 		}
 	}
 
@@ -84,12 +120,15 @@ public abstract class CheckpointIDCounterTest extends TestLogger {
 			counter.start();
 
 			assertEquals(1, counter.getAndIncrement());
+			assertEquals(2, counter.get());
 			assertEquals(2, counter.getAndIncrement());
+			assertEquals(3, counter.get());
 			assertEquals(3, counter.getAndIncrement());
+			assertEquals(4, counter.get());
 			assertEquals(4, counter.getAndIncrement());
 		}
 		finally {
-			counter.stop();
+			counter.shutdown(JobStatus.FINISHED);
 		}
 	}
 
@@ -145,6 +184,7 @@ public abstract class CheckpointIDCounterTest extends TestLogger {
 			}
 
 			// The final count
+			assertEquals(expectedTotal + 1, counter.get());
 			assertEquals(expectedTotal + 1, counter.getAndIncrement());
 		}
 		finally {
@@ -152,7 +192,7 @@ public abstract class CheckpointIDCounterTest extends TestLogger {
 				executor.shutdown();
 			}
 
-			counter.stop();
+			counter.shutdown(JobStatus.FINISHED);
 		}
 	}
 
@@ -166,10 +206,12 @@ public abstract class CheckpointIDCounterTest extends TestLogger {
 
 		// Test setCount
 		counter.setCount(1337);
+		assertEquals(1337, counter.get());
 		assertEquals(1337, counter.getAndIncrement());
+		assertEquals(1338, counter.get());
 		assertEquals(1338, counter.getAndIncrement());
 
-		counter.stop();
+		counter.shutdown(JobStatus.FINISHED);
 	}
 
 	/**

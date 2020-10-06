@@ -20,11 +20,8 @@ package org.apache.flink.test.windowing.sessionwindows;
 
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.java.tuple.Tuple;
-import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.WindowedStream;
-import org.apache.flink.streaming.api.environment.LocalStreamEnvironment;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.functions.windowing.RichWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
@@ -32,11 +29,11 @@ import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.triggers.EventTimeTrigger;
-import org.apache.flink.streaming.api.windowing.triggers.Trigger;
-import org.apache.flink.streaming.api.windowing.triggers.TriggerResult;
+import org.apache.flink.streaming.api.windowing.triggers.PurgingTrigger;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
+import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.util.Collector;
+
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -47,9 +44,9 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * ITCase for Session Windows
+ * ITCase for Session Windows.
  */
-public class SessionWindowITCase extends StreamingMultipleProgramsTestBase {
+public class SessionWindowITCase extends AbstractTestBase {
 
 	// seed for the pseudo random engine of this test
 	private static final long RANDOM_SEED = 1234567;
@@ -103,19 +100,17 @@ public class SessionWindowITCase extends StreamingMultipleProgramsTestBase {
 			WindowFunction<SessionEvent<Integer, TestEventPayload>,
 					String, Tuple, TimeWindow> windowFunction) throws Exception {
 
-
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
-		WindowedStream<SessionEvent<Integer, TestEventPayload>, Tuple, TimeWindow> windowedStream
-				= env.addSource(dataSource).keyBy("sessionKey")
+		WindowedStream<SessionEvent<Integer, TestEventPayload>, Tuple, TimeWindow> windowedStream =
+				env.addSource(dataSource).keyBy("sessionKey")
 				.window(EventTimeSessionWindows.withGap(Time.milliseconds(MAX_SESSION_EVENT_GAP_MS)));
 
 		if (ALLOWED_LATENESS_MS != Long.MAX_VALUE) {
 			windowedStream = windowedStream.allowedLateness(Time.milliseconds(ALLOWED_LATENESS_MS));
 		}
 
-		if (!PURGE_WINDOW_ON_FIRE) {
-			windowedStream = windowedStream.trigger(new NonPurgingEventTimeTriggerWrapper());
+		if (PURGE_WINDOW_ON_FIRE) {
+			windowedStream = windowedStream.trigger(PurgingTrigger.of(EventTimeTrigger.create()));
 		}
 
 		windowedStream.apply(windowFunction).print();
@@ -124,15 +119,15 @@ public class SessionWindowITCase extends StreamingMultipleProgramsTestBase {
 		// check that overall event counts match with our expectations. remember that late events within lateness will
 		// each trigger a window!
 		Assert.assertEquals(
-				(LATE_EVENTS_PER_SESSION + 1) * NUMBER_OF_SESSIONS * EVENTS_PER_SESSION,
-				result.getAccumulatorResult(SESSION_COUNTER_ON_TIME_KEY));
+			(LATE_EVENTS_PER_SESSION + 1) * NUMBER_OF_SESSIONS * EVENTS_PER_SESSION,
+			(long) result.getAccumulatorResult(SESSION_COUNTER_ON_TIME_KEY));
 		Assert.assertEquals(
-				NUMBER_OF_SESSIONS * (LATE_EVENTS_PER_SESSION * (LATE_EVENTS_PER_SESSION + 1) / 2),
-				result.getAccumulatorResult(SESSION_COUNTER_LATE_KEY));
+			NUMBER_OF_SESSIONS * (LATE_EVENTS_PER_SESSION * (LATE_EVENTS_PER_SESSION + 1) / 2),
+			(long) result.getAccumulatorResult(SESSION_COUNTER_LATE_KEY));
 	}
 
 	/**
-	 * Window function that performs correctness checks for this test case
+	 * Window function that performs correctness checks for this test case.
 	 */
 	private static final class ValidatingWindowFunction extends RichWindowFunction<SessionEvent<Integer,
 			TestEventPayload>, String, Tuple, TimeWindow> {
@@ -203,7 +198,7 @@ public class SessionWindowITCase extends StreamingMultipleProgramsTestBase {
 	}
 
 	/**
-	 * A data source that is fed from a ParallelSessionsEventGenerator
+	 * A data source that is fed from a ParallelSessionsEventGenerator.
 	 */
 	private static final class SessionEventGeneratorDataSource
 			implements SourceFunction<SessionEvent<Integer, TestEventPayload>> {
@@ -282,62 +277,6 @@ public class SessionWindowITCase extends StreamingMultipleProgramsTestBase {
 		@Override
 		public void cancel() {
 			isRunning = false;
-		}
-	}
-
-	/**
-	 * Wrapper class that converts purging triggers into non-purging ones
-	 */
-	private static final class NonPurgingEventTimeTriggerWrapper
-			extends Trigger<SessionEvent<Integer, TestEventPayload>, TimeWindow> {
-
-		static final long serialVersionUID = 34763482396L;
-
-		EventTimeTrigger delegate = EventTimeTrigger.create();
-
-		@Override
-		public TriggerResult onElement(
-				SessionEvent<Integer, TestEventPayload> element,
-				long timestamp,
-				TimeWindow window,
-				TriggerContext ctx) throws Exception {
-			return removePurging(delegate.onElement(element, timestamp, window, ctx));
-
-		}
-
-		@Override
-		public TriggerResult onProcessingTime(long time, TimeWindow window, TriggerContext ctx) throws Exception {
-			return removePurging(delegate.onProcessingTime(time, window, ctx));
-		}
-
-		@Override
-		public TriggerResult onEventTime(long time, TimeWindow window, TriggerContext ctx) throws Exception {
-			return removePurging(delegate.onEventTime(time, window, ctx));
-		}
-
-		@Override
-		public boolean canMerge() {
-			return delegate.canMerge();
-		}
-
-		@Override
-		public TriggerResult onMerge(TimeWindow window, OnMergeContext ctx) throws Exception {
-			return removePurging(delegate.onMerge(window, ctx));
-		}
-
-		@Override
-		public void clear(TimeWindow window, TriggerContext ctx) throws Exception {
-			delegate.clear(window, ctx);
-		}
-
-		private TriggerResult removePurging(TriggerResult result) {
-			if (TriggerResult.PURGE == result) {
-				return TriggerResult.CONTINUE;
-			} else if (TriggerResult.FIRE_AND_PURGE == result) {
-				return TriggerResult.FIRE;
-			} else {
-				return result;
-			}
 		}
 	}
 }

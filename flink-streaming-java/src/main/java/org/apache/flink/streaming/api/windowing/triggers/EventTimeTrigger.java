@@ -37,7 +37,7 @@ public class EventTimeTrigger extends Trigger<Object, TimeWindow> {
 	public TriggerResult onElement(Object element, long timestamp, TimeWindow window, TriggerContext ctx) throws Exception {
 		if (window.maxTimestamp() <= ctx.getCurrentWatermark()) {
 			// if the watermark is already past the window fire immediately
-			return TriggerResult.FIRE_AND_PURGE;
+			return TriggerResult.FIRE;
 		} else {
 			ctx.registerEventTimeTimer(window.maxTimestamp());
 			return TriggerResult.CONTINUE;
@@ -47,7 +47,7 @@ public class EventTimeTrigger extends Trigger<Object, TimeWindow> {
 	@Override
 	public TriggerResult onEventTime(long time, TimeWindow window, TriggerContext ctx) {
 		return time == window.maxTimestamp() ?
-			TriggerResult.FIRE_AND_PURGE :
+			TriggerResult.FIRE :
 			TriggerResult.CONTINUE;
 	}
 
@@ -67,10 +67,15 @@ public class EventTimeTrigger extends Trigger<Object, TimeWindow> {
 	}
 
 	@Override
-	public TriggerResult onMerge(TimeWindow window,
+	public void onMerge(TimeWindow window,
 			OnMergeContext ctx) {
-		ctx.registerEventTimeTimer(window.maxTimestamp());
-		return TriggerResult.CONTINUE;
+		// only register a timer if the watermark is not yet past the end of the merged window
+		// this is in line with the logic in onElement(). If the watermark is past the end of
+		// the window onElement() will fire and setting a timer here would fire the window twice.
+		long windowMaxTimestamp = window.maxTimestamp();
+		if (windowMaxTimestamp > ctx.getCurrentWatermark()) {
+			ctx.registerEventTimeTimer(windowMaxTimestamp);
+		}
 	}
 
 	@Override
@@ -81,8 +86,7 @@ public class EventTimeTrigger extends Trigger<Object, TimeWindow> {
 	/**
 	 * Creates an event-time trigger that fires once the watermark passes the end of the window.
 	 *
-	 * <p>
-	 * Once the trigger fires all elements are discarded. Elements that arrive late immediately
+	 * <p>Once the trigger fires all elements are discarded. Elements that arrive late immediately
 	 * trigger window evaluation with just this one element.
 	 */
 	public static EventTimeTrigger create() {

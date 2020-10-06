@@ -25,77 +25,70 @@ import org.apache.flink.api.java.io.DiscardingOutputFormat;
 import org.apache.flink.api.java.operators.DeltaIteration;
 import org.apache.flink.api.java.operators.IterativeDataSet;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.client.program.ProgramInvocationException;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.MemorySize;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.examples.java.clustering.KMeans;
 import org.apache.flink.examples.java.clustering.util.KMeansData;
 import org.apache.flink.examples.java.graph.ConnectedComponents;
 import org.apache.flink.examples.java.graph.util.ConnectedComponentsData;
-import org.apache.flink.test.util.ForkableFlinkMiniCluster;
+import org.apache.flink.runtime.client.JobExecutionException;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
+import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.apache.flink.util.TestLogger;
 
+import org.junit.ClassRule;
 import org.junit.Test;
 
-import static org.junit.Assert.*;
+import static org.apache.flink.util.ExceptionUtils.findThrowableWithMessage;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
-public class SuccessAfterNetworkBuffersFailureITCase {
-	
-	
-	@Test
-	public void testSuccessfulProgramAfterFailure() {
-		ForkableFlinkMiniCluster cluster = null;
-		
-		try {
-			Configuration config = new Configuration();
-			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, 2);
-			config.setInteger(ConfigConstants.TASK_MANAGER_MEMORY_SIZE_KEY, 80);
-			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, 8);
-			config.setInteger(ConfigConstants.TASK_MANAGER_NETWORK_NUM_BUFFERS_KEY, 840);
-			
-			cluster = new ForkableFlinkMiniCluster(config, false);
+/**
+ * Test that runs an iterative job after a failure in another iterative job.
+ * This test validates that task slots in co-location constraints are properly
+ * freed in the presence of failures.
+ */
+public class SuccessAfterNetworkBuffersFailureITCase extends TestLogger {
 
-			cluster.start();
-			
-			try {
-				runConnectedComponents(cluster.getLeaderRPCPort());
-			}
-			catch (Exception e) {
-				e.printStackTrace();
-				fail("Program Execution should have succeeded.");
-			}
-	
-			try {
-				runKMeans(cluster.getLeaderRPCPort());
-				fail("This program execution should have failed.");
-			}
-			catch (ProgramInvocationException e) {
-				assertTrue(e.getCause().getCause().getMessage().contains("Insufficient number of network buffers"));
-			}
-	
-			try {
-				runConnectedComponents(cluster.getLeaderRPCPort());
-			}
-			catch (Exception e) {
-				e.printStackTrace();
-				fail("Program Execution should have succeeded.");
-			}
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-		finally {
-			if (cluster != null) {
-				cluster.shutdown();
-			}
-		}
+	private static final int PARALLELISM = 16;
+
+	@ClassRule
+	public static final MiniClusterWithClientResource MINI_CLUSTER_RESOURCE = new MiniClusterWithClientResource(
+		new MiniClusterResourceConfiguration.Builder()
+			.setConfiguration(getConfiguration())
+			.setNumberTaskManagers(2)
+			.setNumberSlotsPerTaskManager(8)
+			.build());
+
+	private static Configuration getConfiguration() {
+		Configuration config = new Configuration();
+		config.set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.parse("80m"));
+		config.set(TaskManagerOptions.NETWORK_MEMORY_MIN, MemorySize.ofMebiBytes(32L));
+		config.set(TaskManagerOptions.NETWORK_MEMORY_MAX, MemorySize.ofMebiBytes(32L));
+		return config;
 	}
-	
-	private static void runConnectedComponents(int jmPort) throws Exception {
-		
-		ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment("localhost", jmPort);
-		env.setParallelism(16);
-		env.getConfig().disableSysoutLogging();
+
+	@Test
+	public void testSuccessfulProgramAfterFailure() throws Exception {
+		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		runConnectedComponents(env);
+
+		try {
+			runKMeans(env);
+			fail("This program execution should have failed.");
+		}
+		catch (JobExecutionException e) {
+			assertTrue(findThrowableWithMessage(e, "Insufficient number of network buffers").isPresent());
+		}
+
+		runConnectedComponents(env);
+	}
+
+	private static void runConnectedComponents(ExecutionEnvironment env) throws Exception {
+
+		env.setParallelism(PARALLELISM);
 
 		// read vertex and edge data
 		DataSet<Long> vertices = ConnectedComponentsData.getDefaultVertexDataSet(env)
@@ -133,11 +126,9 @@ public class SuccessAfterNetworkBuffersFailureITCase {
 		env.execute();
 	}
 
-	private static void runKMeans(int jmPort) throws Exception {
+	private static void runKMeans(ExecutionEnvironment env) throws Exception {
 
-		ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment("localhost", jmPort);
-		env.setParallelism(16);
-		env.getConfig().disableSysoutLogging();
+		env.setParallelism(PARALLELISM);
 
 		// get input data
 		DataSet<KMeans.Point> points =  KMeansData.getDefaultPointDataSet(env).rebalance();
@@ -146,13 +137,16 @@ public class SuccessAfterNetworkBuffersFailureITCase {
 		// set number of bulk iterations for KMeans algorithm
 		IterativeDataSet<KMeans.Centroid> loop = centroids.iterate(20);
 
+		// add some re-partitions to increase network buffer use
 		DataSet<KMeans.Centroid> newCentroids = points
 				// compute closest centroid for each point
 				.map(new KMeans.SelectNearestCenter()).withBroadcastSet(loop, "centroids")
-						// count and sum point coordinates for each centroid
+				.rebalance()
+				// count and sum point coordinates for each centroid
 				.map(new KMeans.CountAppender())
 				.groupBy(0).reduce(new KMeans.CentroidAccumulator())
-						// compute new centroids from point counts and coordinate sums
+				// compute new centroids from point counts and coordinate sums
+				.rebalance()
 				.map(new KMeans.CentroidAverager());
 
 		// feed new centroids back into next iteration
@@ -163,7 +157,7 @@ public class SuccessAfterNetworkBuffersFailureITCase {
 				.map(new KMeans.SelectNearestCenter()).withBroadcastSet(finalCentroids, "centroids");
 
 		clusteredPoints.output(new DiscardingOutputFormat<Tuple2<Integer, KMeans.Point>>());
-		
+
 		env.execute("KMeans Example");
 	}
 }

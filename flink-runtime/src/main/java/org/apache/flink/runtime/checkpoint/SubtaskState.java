@@ -18,32 +18,48 @@
 
 package org.apache.flink.runtime.checkpoint;
 
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.util.SerializedValue;
+import org.apache.flink.runtime.state.ChainedStateHandle;
+import org.apache.flink.runtime.state.CompositeStateHandle;
+import org.apache.flink.runtime.state.KeyedStateHandle;
+import org.apache.flink.runtime.state.OperatorStateHandle;
+import org.apache.flink.runtime.state.SharedStateRegistry;
+import org.apache.flink.runtime.state.StateObject;
+import org.apache.flink.runtime.state.StateUtil;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.Serializable;
-
-import static org.apache.flink.util.Preconditions.checkNotNull;
+import java.util.Arrays;
 
 /**
- * Simple bean to describe the state belonging to a parallel operator. It is part of the
+ * Container for the chained state of one parallel subtask of an operator/task. This is part of the
  * {@link TaskState}.
- * 
- * The state itself is kept in serialized form, since the checkpoint coordinator itself
- * is never looking at it anyways and only sends it back out in case of a recovery.
- * Furthermore, the state may involve user-defined classes that are not accessible without
- * the respective classloader.
  */
-public class SubtaskState implements Serializable {
-
-	private static final long serialVersionUID = -2394696997971923995L;
+public class SubtaskState implements CompositeStateHandle {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SubtaskState.class);
 
-	/** The state of the parallel operator */
-	private final SerializedValue<StateHandle<?>> state;
+	private static final long serialVersionUID = -2394696997971923995L;
+
+	/**
+	 * Snapshot from the {@link org.apache.flink.runtime.state.OperatorStateBackend}.
+	 */
+	private final ChainedStateHandle<OperatorStateHandle> managedOperatorState;
+
+	/**
+	 * Snapshot written using {@link org.apache.flink.runtime.state.OperatorStateCheckpointOutputStream}.
+	 */
+	private final ChainedStateHandle<OperatorStateHandle> rawOperatorState;
+
+	/**
+	 * Snapshot from {@link org.apache.flink.runtime.state.KeyedStateBackend}.
+	 */
+	private final KeyedStateHandle managedKeyedState;
+
+	/**
+	 * Snapshot written using {@link org.apache.flink.runtime.state.KeyedStateCheckpointOutputStream}.
+	 */
+	private final KeyedStateHandle rawKeyedState;
 
 	/**
 	 * The state size. This is also part of the deserialized state handle.
@@ -52,37 +68,78 @@ public class SubtaskState implements Serializable {
 	 */
 	private final long stateSize;
 
-	/** The duration of the acknowledged (ack timestamp - trigger timestamp). */
-	private final long duration;
-	
 	public SubtaskState(
-			SerializedValue<StateHandle<?>> state,
-			long stateSize,
-			long duration) {
+			ChainedStateHandle<OperatorStateHandle> managedOperatorState,
+			ChainedStateHandle<OperatorStateHandle> rawOperatorState,
+			KeyedStateHandle managedKeyedState,
+			KeyedStateHandle rawKeyedState) {
 
-		this.state = checkNotNull(state, "State");
-		// Sanity check and don't fail checkpoint because of this.
-		this.stateSize = stateSize >= 0 ? stateSize : 0;
+		this.managedOperatorState = managedOperatorState;
+		this.rawOperatorState = rawOperatorState;
+		this.managedKeyedState = managedKeyedState;
+		this.rawKeyedState = rawKeyedState;
 
-		this.duration = duration;
+		try {
+			long calculateStateSize = getSizeNullSafe(managedOperatorState);
+			calculateStateSize += getSizeNullSafe(rawOperatorState);
+			calculateStateSize += getSizeNullSafe(managedKeyedState);
+			calculateStateSize += getSizeNullSafe(rawKeyedState);
+			stateSize = calculateStateSize;
+		} catch (Exception e) {
+			throw new RuntimeException("Failed to get state size.", e);
+		}
+	}
+
+	private static long getSizeNullSafe(StateObject stateObject) throws Exception {
+		return stateObject != null ? stateObject.getStateSize() : 0L;
 	}
 
 	// --------------------------------------------------------------------------------------------
-	
-	public SerializedValue<StateHandle<?>> getState() {
-		return state;
+
+	public ChainedStateHandle<OperatorStateHandle> getManagedOperatorState() {
+		return managedOperatorState;
 	}
 
+	public ChainedStateHandle<OperatorStateHandle> getRawOperatorState() {
+		return rawOperatorState;
+	}
+
+	public KeyedStateHandle getManagedKeyedState() {
+		return managedKeyedState;
+	}
+
+	public KeyedStateHandle getRawKeyedState() {
+		return rawKeyedState;
+	}
+
+	@Override
+	public void discardState() {
+		try {
+			StateUtil.bestEffortDiscardAllStateObjects(
+				Arrays.asList(
+					managedOperatorState,
+					rawOperatorState,
+					managedKeyedState,
+					rawKeyedState));
+		} catch (Exception e) {
+			LOG.warn("Error while discarding operator states.", e);
+		}
+	}
+
+	@Override
+	public void registerSharedStates(SharedStateRegistry sharedStateRegistry) {
+		if (managedKeyedState != null) {
+			managedKeyedState.registerSharedStates(sharedStateRegistry);
+		}
+
+		if (rawKeyedState != null) {
+			rawKeyedState.registerSharedStates(sharedStateRegistry);
+		}
+	}
+
+	@Override
 	public long getStateSize() {
 		return stateSize;
-	}
-
-	public long getDuration() {
-		return duration;
-	}
-
-	public void discard(ClassLoader userClassLoader) throws Exception {
-		state.deserializeValue(userClassLoader).discardState();
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -92,25 +149,55 @@ public class SubtaskState implements Serializable {
 		if (this == o) {
 			return true;
 		}
-		else if (o instanceof SubtaskState) {
-			SubtaskState that = (SubtaskState) o;
-			return this.state.equals(that.state) && stateSize == that.stateSize &&
-				duration == that.duration;
-		}
-		else {
+		if (o == null || getClass() != o.getClass()) {
 			return false;
 		}
+
+		SubtaskState that = (SubtaskState) o;
+
+		if (stateSize != that.stateSize) {
+			return false;
+		}
+
+		if (managedOperatorState != null ?
+				!managedOperatorState.equals(that.managedOperatorState)
+				: that.managedOperatorState != null) {
+			return false;
+		}
+		if (rawOperatorState != null ?
+				!rawOperatorState.equals(that.rawOperatorState)
+				: that.rawOperatorState != null) {
+			return false;
+		}
+		if (managedKeyedState != null ?
+				!managedKeyedState.equals(that.managedKeyedState)
+				: that.managedKeyedState != null) {
+			return false;
+		}
+		return rawKeyedState != null ?
+				rawKeyedState.equals(that.rawKeyedState)
+				: that.rawKeyedState == null;
+
 	}
 
 	@Override
 	public int hashCode() {
-		return (int) (this.stateSize ^ this.stateSize >>> 32) +
-			31 * ((int) (this.duration ^ this.duration >>> 32) +
-				31 * state.hashCode());
+		int result = (managedOperatorState != null ? managedOperatorState.hashCode() : 0);
+		result = 31 * result + (rawOperatorState != null ? rawOperatorState.hashCode() : 0);
+		result = 31 * result + (managedKeyedState != null ? managedKeyedState.hashCode() : 0);
+		result = 31 * result + (rawKeyedState != null ? rawKeyedState.hashCode() : 0);
+		result = 31 * result + (int) (stateSize ^ (stateSize >>> 32));
+		return result;
 	}
 
 	@Override
 	public String toString() {
-		return String.format("StateForTask(Size: %d, Duration: %d, State: %s)", stateSize, duration, state);
+		return "SubtaskState{" +
+				"operatorStateFromBackend=" + managedOperatorState +
+				", operatorStateFromStream=" + rawOperatorState +
+				", keyedStateFromBackend=" + managedKeyedState +
+				", keyedStateFromStream=" + rawKeyedState +
+				", stateSize=" + stateSize +
+				'}';
 	}
 }

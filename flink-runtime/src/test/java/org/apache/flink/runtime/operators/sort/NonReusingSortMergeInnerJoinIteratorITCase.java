@@ -33,6 +33,7 @@ import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.runtime.memory.MemoryManagerBuilder;
 import org.apache.flink.runtime.operators.testutils.DiscardingOutputCollector;
 import org.apache.flink.runtime.operators.testutils.DummyInvokable;
 import org.apache.flink.runtime.operators.testutils.Match;
@@ -43,6 +44,7 @@ import org.apache.flink.runtime.operators.testutils.TestData.TupleGenerator.KeyM
 import org.apache.flink.runtime.operators.testutils.TestData.TupleGenerator.ValueMode;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
+import org.apache.flink.util.TestLogger;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -56,7 +58,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 
 @SuppressWarnings("deprecation")
-public class NonReusingSortMergeInnerJoinIteratorITCase {
+public class NonReusingSortMergeInnerJoinIteratorITCase extends TestLogger {
 	
 	// total memory
 	private static final int MEMORY_SIZE = 1024 * 1024 * 16;
@@ -104,17 +106,14 @@ public class NonReusingSortMergeInnerJoinIteratorITCase {
 				new TypeSerializer<?>[] { IntSerializer.INSTANCE });
 		pairComparator = new GenericPairComparator<Tuple2<Integer, String>, Tuple2<Integer, String>>(comparator1, comparator2);
 		
-		this.memoryManager = new MemoryManager(MEMORY_SIZE, 1);
+		this.memoryManager = MemoryManagerBuilder.newBuilder().setMemorySize(MEMORY_SIZE).build();
 		this.ioManager = new IOManagerAsync();
 	}
 
 	@After
-	public void afterTest() {
+	public void afterTest() throws Exception {
 		if (this.ioManager != null) {
-			this.ioManager.shutdown();
-			if (!this.ioManager.isProperlyShutDown()) {
-				Assert.fail("I/O manager failed to properly shut down.");
-			}
+			this.ioManager.close();
 			this.ioManager = null;
 		}
 		

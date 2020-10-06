@@ -36,6 +36,7 @@ import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.runtime.memory.MemoryManagerBuilder;
 import org.apache.flink.runtime.operators.hash.NonReusingHashJoinIteratorITCase.TupleMatch;
 import org.apache.flink.runtime.operators.hash.NonReusingHashJoinIteratorITCase.TupleIntPairMatch;
 import org.apache.flink.runtime.operators.testutils.DiscardingOutputCollector;
@@ -50,6 +51,7 @@ import org.apache.flink.runtime.operators.testutils.types.IntPairSerializer;
 import org.apache.flink.types.NullKeyFieldException;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
+import org.apache.flink.util.TestLogger;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -64,7 +66,7 @@ import static org.apache.flink.runtime.operators.hash.NonReusingHashJoinIterator
 import static org.apache.flink.runtime.operators.hash.NonReusingHashJoinIteratorITCase.collectIntPairData;
 
 @SuppressWarnings({"serial"})
-public class ReusingHashJoinIteratorITCase {
+public class ReusingHashJoinIteratorITCase extends TestLogger {
 	
 	private static final int MEMORY_SIZE = 16000000;		// total memory
 
@@ -105,17 +107,14 @@ public class ReusingHashJoinIteratorITCase {
 		this.pairRecordPairComparator = new IntPairTuplePairComparator();
 		this.recordPairPairComparator = new TupleIntPairPairComparator();
 		
-		this.memoryManager = new MemoryManager(MEMORY_SIZE, 1);
+		this.memoryManager = MemoryManagerBuilder.newBuilder().setMemorySize(MEMORY_SIZE).build();
 		this.ioManager = new IOManagerAsync();
 	}
 
 	@After
-	public void afterTest() {
+	public void afterTest() throws Exception {
 		if (this.ioManager != null) {
-			this.ioManager.shutdown();
-			if (!this.ioManager.isProperlyShutDown()) {
-				Assert.fail("I/O manager failed to properly shut down.");
-			}
+			this.ioManager.close();
 			this.ioManager = null;
 		}
 		

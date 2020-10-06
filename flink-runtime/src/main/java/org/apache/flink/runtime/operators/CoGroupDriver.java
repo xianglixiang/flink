@@ -97,7 +97,7 @@ public class CoGroupDriver<IT1, IT2, OT> implements Driver<CoGroupFunction<IT1, 
 			throw new Exception("Unrecognized driver strategy for CoGoup driver: " + config.getDriverStrategy().name());
 		}
 
-		final Counter numRecordsIn = this.taskContext.getMetricGroup().counter("numRecordsIn");
+		final Counter numRecordsIn = this.taskContext.getMetricGroup().getIOMetricGroup().getNumRecordsInCounter();
 		
 		final MutableObjectIterator<IT1> in1 = new CountingMutableObjectIterator<>(this.taskContext.<IT1>getInput(0), numRecordsIn);
 		final MutableObjectIterator<IT2> in2 = new CountingMutableObjectIterator<>(this.taskContext.<IT2>getInput(1), numRecordsIn);
@@ -122,14 +122,14 @@ public class CoGroupDriver<IT1, IT2, OT> implements Driver<CoGroupFunction<IT1, 
 		}
 
 		if (objectReuseEnabled) {
-			// create CoGropuTaskIterator according to provided local strategy.
+			// create CoGroupTaskIterator according to provided local strategy.
 			this.coGroupIterator = new ReusingSortMergeCoGroupIterator<IT1, IT2>(
 					in1, in2,
 					serializer1, groupComparator1,
 					serializer2, groupComparator2,
 					pairComparatorFactory.createComparator12(groupComparator1, groupComparator2));
 		} else {
-			// create CoGropuTaskIterator according to provided local strategy.
+			// create CoGroupTaskIterator according to provided local strategy.
 			this.coGroupIterator = new NonReusingSortMergeCoGroupIterator<IT1, IT2>(
 					in1, in2,
 					serializer1, groupComparator1,
@@ -149,7 +149,7 @@ public class CoGroupDriver<IT1, IT2, OT> implements Driver<CoGroupFunction<IT1, 
 	@Override
 	public void run() throws Exception
 	{
-		final Counter numRecordsOut = this.taskContext.getMetricGroup().counter("numRecordsOut");
+		final Counter numRecordsOut = this.taskContext.getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter();
 
 		final CoGroupFunction<IT1, IT2, OT> coGroupStub = this.taskContext.getStub();
 		final Collector<OT> collector = new CountingCollector<>(this.taskContext.getOutputCollector(), numRecordsOut);

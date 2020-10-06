@@ -22,11 +22,11 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 
 import org.apache.flink.annotation.Public;
+import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.configuration.GlobalConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FSDataOutputStream;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
@@ -62,26 +62,26 @@ public abstract class FileOutputFormat<IT> extends RichOutputFormat<IT> implemen
 	private static WriteMode DEFAULT_WRITE_MODE;
 	
 	private static OutputDirectoryMode DEFAULT_OUTPUT_DIRECTORY_MODE;
-	
-	
-	private static final void initDefaultsFromConfiguration(Configuration configuration) {
-		final boolean overwrite = configuration.getBoolean(ConfigConstants
-						.FILESYSTEM_DEFAULT_OVERWRITE_KEY,
-				ConfigConstants.DEFAULT_FILESYSTEM_OVERWRITE);
+
+	static {
+		initDefaultsFromConfiguration(GlobalConfiguration.loadConfiguration());
+	}
+
+	/**
+	 * Initialize defaults for output format. Needs to be a static method because it is configured for local
+	 * cluster execution.
+	 * @param configuration The configuration to load defaults from
+	 */
+	public static void initDefaultsFromConfiguration(Configuration configuration) {
+		final boolean overwrite = configuration.getBoolean(CoreOptions.FILESYTEM_DEFAULT_OVERRIDE);
 	
 		DEFAULT_WRITE_MODE = overwrite ? WriteMode.OVERWRITE : WriteMode.NO_OVERWRITE;
 		
-		final boolean alwaysCreateDirectory = configuration.getBoolean(ConfigConstants
-						.FILESYSTEM_OUTPUT_ALWAYS_CREATE_DIRECTORY_KEY,
-			ConfigConstants.DEFAULT_FILESYSTEM_ALWAYS_CREATE_DIRECTORY);
+		final boolean alwaysCreateDirectory = configuration.getBoolean(CoreOptions.FILESYSTEM_OUTPUT_ALWAYS_CREATE_DIRECTORY);
 	
 		DEFAULT_OUTPUT_DIRECTORY_MODE = alwaysCreateDirectory ? OutputDirectoryMode.ALWAYS : OutputDirectoryMode.PARONLY;
 	}
-	
-	static {
-		initDefaultsFromConfiguration(GlobalConfiguration.getConfiguration());
-	}
-	
+
 	// --------------------------------------------------------------------------------------------	
 	
 	/**
@@ -100,7 +100,7 @@ public abstract class FileOutputFormat<IT> extends RichOutputFormat<IT> implemen
 	protected Path outputFilePath;
 	
 	/**
-	 * The write mode of the output.	
+	 * The write mode of the output.
 	 */
 	private WriteMode writeMode;
 	
@@ -121,9 +121,9 @@ public abstract class FileOutputFormat<IT> extends RichOutputFormat<IT> implemen
 	private transient boolean fileCreated;
 
 	// --------------------------------------------------------------------------------------------
-	
+
 	public FileOutputFormat() {}
-	
+
 	public FileOutputFormat(Path outputPath) {
 		this.outputFilePath = outputPath;
 	}
@@ -245,7 +245,7 @@ public abstract class FileOutputFormat<IT> extends RichOutputFormat<IT> implemen
 		this.actualFilePath = (numTasks > 1 || outputDirectoryMode == OutputDirectoryMode.ALWAYS) ? p.suffix("/" + getDirectoryFileName(taskNumber)) : p;
 
 		// create output file
-		this.stream = fs.create(this.actualFilePath, writeMode == WriteMode.OVERWRITE);
+		this.stream = fs.create(this.actualFilePath, writeMode);
 		
 		// at this point, the file creation must have succeeded, or an exception has been thrown
 		this.fileCreated = true;
@@ -315,7 +315,7 @@ public abstract class FileOutputFormat<IT> extends RichOutputFormat<IT> implemen
 			} catch (FileNotFoundException e) {
 				// ignore, may not be visible yet or may be already removed
 			} catch (Throwable t) {
-				LOG.error("Could not remove the incomplete file " + actualFilePath);
+				LOG.error("Could not remove the incomplete file " + actualFilePath + '.', t);
 			}
 		}
 	}

@@ -1,5 +1,8 @@
 ---
-title: "Overview"
+title: "Apache Flink Documentation"
+nav-pos: 0
+nav-title: '<i class="fa fa-home title" aria-hidden="true"></i> Home'
+nav-parent_id: root
 ---
 <!--
 Licensed to the Apache Software Foundation (ASF) under one
@@ -20,40 +23,72 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-This documentation is for Apache Flink version {{ site.version }}.
+<p style="margin: 30px 60px 0 60px;text-align: center" markdown="1">
+Apache Flink is a framework and distributed processing engine for stateful computations over _unbounded and bounded_ data streams. Flink has been designed to run in _all common cluster environments_, perform computations at _in-memory speed_ and at _any scale_.
+</p>
 
-Apache Flink is an open source platform for distributed stream and batch data processing. Flink’s core is a streaming dataflow engine that provides data distribution, communication, and fault tolerance for distributed computations over data streams. Flink also builds batch processing on top of the streaming engine, overlaying native iteration support, managed memory, and program optimization.
+<div class="row">
+<div class="col-sm-6" markdown="1">
 
-## First Steps
+### Try Flink
 
-- **Concepts**: Start with the [basic concepts]({{ site.baseurl }}/concepts/concepts.html) of Flink. This will help you to fully understand the other parts of the documentation, including the setup and programming guides. It is highly recommended to read this first.
+If you’re interested in playing around with Flink, try one of our tutorials:
 
-- **Quickstarts**: [Run an example program](quickstart/setup_quickstart.html) on your local machine or [write a simple program](quickstart/run_example_quickstart.html) working on live Wikipedia edits.
+* [Local Installation]({% link try-flink/local_installation.md %})
+* [Fraud Detection with the DataStream API]({% link try-flink/datastream_api.md %})
+* [Real Time Reporting with the Table API]({% link try-flink/table_api.md %})
+* [Intro to the Python Table API]({% link try-flink/python_api.md %})
+* [Flink Operations Playground]({% link try-flink/flink-operations-playground.md %})
 
-- **Setup:** The [local]({{ site.baseurl }}/setup/local_setup.html), [cluster](setup/cluster_setup.html), and [cloud](setup/gce_setup.html) setup guides show you how to deploy Flink.
+### Learn Flink
 
-- **Programming Guides**: You can check out our guides about [basic concepts](apis/common/index.html) and the [DataStream API](apis/streaming/index.html) or [DataSet API](apis/batch/index.html) to learn how to write your first Flink programs.
+* To dive in deeper, the [Hands-on Training]({% link learn-flink/index.md %}) includes a set of lessons and exercises that provide a step-by-step introduction to Flink.
 
-- **Migration Guide**: Check out the [0.10 to 1.0 migration guide](https://cwiki.apache.org/confluence/display/FLINK/Migration+Guide%3A+0.10.x+to+1.0.x) if you are upgrading from Flink 0.10.x.
+* The [Concepts]({% link concepts/index.md %}) section explains what you need to know about Flink before exploring the reference documentation.
 
-## Stack
+### Get Help with Flink
 
-This is an overview of Flink's stack. Click on any component to go to the respective documentation page.
+If you get stuck, check out our [community support resources](https://flink.apache.org/community.html). In particular, Apache Flink’s user mailing list is consistently ranked as one of the most active of any Apache project, and is a great way to get help quickly.
 
-<center>
-  <img src="fig/stack.png" width="700px" alt="Apache Flink: Stack" usemap="#overview-stack">
-</center>
+</div>
+<div class="col-sm-6" markdown="1">
 
-<map name="overview-stack">
-<area id="lib-datastream-cep" title="CEP: Complex Event Processing" href="{{ site.baseurl }}/apis/streaming/libs/cep.html" shape="rect" coords="63,0,143,177" />
-<area id="lib-datastream-table" title="Table: Relational DataStreams" href="{{ site.baseurl }}/apis/batch/libs/table.html" shape="rect" coords="143,0,223,177" />
-<area id="lib-dataset-ml" title="FlinkML: Machine Learning" href="{{ site.baseurl }}/apis/batch/libs/ml/index.html" shape="rect" coords="382,2,462,176" />
-<area id="lib-dataset-gelly" title="Gelly: Graph Processing" href="{{ site.baseurl }}/apis/batch/libs/gelly.html" shape="rect" coords="461,0,541,177" />
-<area id="lib-dataset-table" title="Table API and SQL" href="{{ site.baseurl }}/apis/table.html" shape="rect" coords="544,0,624,177" />
-<area id="datastream" title="DataStream API" href="{{ site.baseurl }}/apis/streaming/index.html" shape="rect" coords="64,177,379,255" />
-<area id="dataset" title="DataSet API" href="{{ site.baseurl }}/apis/batch/index.html" shape="rect" coords="382,177,697,255" />
-<area id="runtime" title="Runtime" href="{{ site.baseurl }}/internals/general_arch.html" shape="rect" coords="63,257,700,335" />
-<area id="local" title="Local" href="{{ site.baseurl }}/setup/local_setup.html" shape="rect" coords="62,337,275,414" />
-<area id="cluster" title="Cluster" href="{{ site.baseurl }}/setup/cluster_setup.html" shape="rect" coords="273,336,486,413" />
-<area id="cloud" title="Cloud" href="{{ site.baseurl }}/setup/gce_setup.html" shape="rect" coords="485,336,700,414" />
-</map>
+### Explore Flink
+
+The reference documentation covers all the details. Some starting points:
+
+<div class="row">
+<div class="col-sm-6" markdown="1">
+
+* [DataStream API]({% link dev/datastream_api.md %})
+* [Table API &amp; SQL]({% link dev/table/index.md %})
+* [Stateful Functions]({% if site.is_stable %} {{ site.statefundocs_stable_baseurl }} {% else %} {{ site.statefundocs_baseurl }} {% endif %})
+
+</div>
+<div class="col-sm-6" markdown="1">
+
+* [Configuration]({% link ops/config.md %})
+* [Rest API]({% link monitoring/rest_api.md %})
+* [CLI]({% link ops/cli.md %})
+
+</div>
+</div>
+
+### Deploy Flink
+
+Before putting your Flink job into production, read the [Production Readiness Checklist]({% link ops/production_ready.md %}). For an overview of possible deployment targets, see [Clusters and Deployments]({% link ops/deployment/index.md %}). 
+
+### Upgrade Flink
+
+Release notes cover important changes between Flink versions. Please read them carefully if you plan to upgrade your Flink setup.
+
+See the release notes for [Flink 1.11]({% link release-notes/flink-1.11.md %}), [Flink 1.10]({% link release-notes/flink-1.10.md %}), [Flink 1.9]({% link release-notes/flink-1.9.md %}), [Flink 1.8]({% link release-notes/flink-1.8.md %}), or [Flink 1.7]({% link release-notes/flink-1.7.md %}).
+
+</div>
+</div>
+
+<div style="margin: 40px 0 0 0; position: relative; top: 20px;">
+<p>
+This documentation is for Apache Flink version {{ site.version_title }}. These pages were built at: {% build_time %}.
+</p>
+</div>

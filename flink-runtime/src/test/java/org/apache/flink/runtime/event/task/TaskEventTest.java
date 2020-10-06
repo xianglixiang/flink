@@ -18,22 +18,19 @@
 
 package org.apache.flink.runtime.event.task;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
-import java.io.IOException;
-import java.util.Iterator;
-
-import org.apache.flink.runtime.event.AbstractEvent;
 import org.apache.flink.util.InstantiationUtil;
 
 import org.junit.Test;
 
+import java.io.IOException;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 /**
  * This class contains serialization tests concerning task events derived from
  * {@link org.apache.flink.runtime.event.AbstractEvent}.
- * 
  */
 public class TaskEventTest {
 	/**
@@ -69,31 +66,6 @@ public class TaskEventTest {
 			assertEquals(orig.getString(), copy.getString());
 			assertEquals(orig.hashCode(), copy.hashCode());
 			assertTrue(orig.equals(copy));
-
-		} catch (IOException ioe) {
-			fail(ioe.getMessage());
-		}
-	}
-
-	/**
-	 * This test checks the serialization/deserialization of {@link EventList} objects.
-	 */
-	@Test
-	public void testEventList() {
-
-		try {
-
-			final EventList orig = new EventList();
-			orig.add(new StringTaskEvent("Test 2"));
-			orig.add(new IntegerTaskEvent(70));
-			final EventList copy = InstantiationUtil.createCopyWritable(orig);
-
-			assertEquals(orig.size(), copy.size());
-			final Iterator<AbstractEvent> origIt = orig.iterator();
-			final Iterator<AbstractEvent> copyIt = copy.iterator();
-			while (origIt.hasNext()) {
-				assertEquals(origIt.next(), copyIt.next());
-			}
 
 		} catch (IOException ioe) {
 			fail(ioe.getMessage());

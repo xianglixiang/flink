@@ -18,16 +18,6 @@
 
 package org.apache.flink.runtime.net;
 
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.NetworkInterface;
-import java.net.Socket;
-import java.net.SocketAddress;
-import java.util.Enumeration;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalException;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalListener;
@@ -35,14 +25,29 @@ import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import scala.concurrent.duration.FiniteDuration;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
+import java.net.Socket;
+import java.net.SocketAddress;
+import java.net.UnknownHostException;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.UUID;
 
 /**
  * Utilities to determine the network interface and address that should be used to bind the
  * TaskManager communication to.
+ *
+ * <p>Implementation note: This class uses {@code System.nanoTime()} to measure elapsed time, because
+ * that is not susceptible to clock changes.
  */
 public class ConnectionUtils {
-	
+
 	private static final Logger LOG = LoggerFactory.getLogger(ConnectionUtils.class);
 
 	private static final long MIN_SLEEP_TIME = 50;
@@ -53,15 +58,15 @@ public class ConnectionUtils {
 	 * There is only a state transition if the current state failed to determine the address.
 	 */
 	private enum AddressDetectionState {
-		/** Connect from interface returned by InetAddress.getLocalHost() **/
+		/** Connect from interface returned by InetAddress.getLocalHost(). **/
 		LOCAL_HOST(200),
 		/** Detect own IP address based on the target IP address. Look for common prefix */
 		ADDRESS(50),
-		/** Try to connect on all Interfaces and all their addresses with a low timeout */
+		/** Try to connect on all Interfaces and all their addresses with a low timeout. */
 		FAST_CONNECT(50),
-		/** Try to connect on all Interfaces and all their addresses with a long timeout */
+		/** Try to connect on all Interfaces and all their addresses with a long timeout. */
 		SLOW_CONNECT(1000),
-		/** Choose any non-loopback address */
+		/** Choose any non-loopback address. */
 		HEURISTIC(0);
 
 		private final int timeout;
@@ -82,11 +87,11 @@ public class ConnectionUtils {
 	 * given target, so it only succeeds if the target socket address actually accepts
 	 * connections. The method tries various strategies multiple times and uses an exponential
 	 * backoff timer between tries.
-	 * <p>
-	 * If no connection attempt was successful after the given maximum time, the method
+	 *
+	 * <p>If no connection attempt was successful after the given maximum time, the method
 	 * will choose some address based on heuristics (excluding link-local and loopback addresses.)
-	 * <p>
-	 * This method will initially not log on info level (to not flood the log while the
+	 *
+	 * <p>This method will initially not log on info level (to not flood the log while the
 	 * backoff time is still very low). It will start logging after a certain time
 	 * has passes.
 	 *
@@ -96,8 +101,7 @@ public class ConnectionUtils {
 	 * @param startLoggingAfter The time after which the method will log on INFO level.
 	 */
 	public static InetAddress findConnectingAddress(InetSocketAddress targetAddress,
-							long maxWaitMillis, long startLoggingAfter) throws IOException
-	{
+							long maxWaitMillis, long startLoggingAfter) throws IOException {
 		if (targetAddress == null) {
 			throw new NullPointerException("targetAddress must not be null");
 		}
@@ -105,51 +109,38 @@ public class ConnectionUtils {
 			throw new IllegalArgumentException("Max wait time must be positive");
 		}
 
-		final long startTime = System.currentTimeMillis();
+		final long startTimeNanos = System.nanoTime();
 
 		long currentSleepTime = MIN_SLEEP_TIME;
-		long elapsedTime = 0;
+		long elapsedTimeMillis = 0;
+
+		final List<AddressDetectionState> strategies = Collections.unmodifiableList(
+			Arrays.asList(
+				AddressDetectionState.LOCAL_HOST,
+				AddressDetectionState.ADDRESS,
+				AddressDetectionState.FAST_CONNECT,
+				AddressDetectionState.SLOW_CONNECT));
 
 		// loop while there is time left
-		while (elapsedTime < maxWaitMillis) {
-			AddressDetectionState strategy = AddressDetectionState.LOCAL_HOST;
-
-			boolean logging = elapsedTime >= startLoggingAfter;
+		while (elapsedTimeMillis < maxWaitMillis) {
+			boolean logging = elapsedTimeMillis >= startLoggingAfter;
 			if (logging) {
 				LOG.info("Trying to connect to " + targetAddress);
 			}
-			// go over the strategies ADDRESS - FAST_CONNECT - SLOW_CONNECT
-			do {
+
+			// Try each strategy in order
+			for (AddressDetectionState strategy : strategies) {
 				InetAddress address = findAddressUsingStrategy(strategy, targetAddress, logging);
 				if (address != null) {
 					return address;
 				}
-
-				// pick the next strategy
-				switch (strategy) {
-					case LOCAL_HOST:
-						strategy = AddressDetectionState.ADDRESS;
-						break;
-					case ADDRESS:
-						strategy = AddressDetectionState.FAST_CONNECT;
-						break;
-					case FAST_CONNECT:
-						strategy = AddressDetectionState.SLOW_CONNECT;
-						break;
-					case SLOW_CONNECT:
-						strategy = null;
-						break;
-					default:
-						throw new RuntimeException("Unsupported strategy: " + strategy);
-				}
 			}
-			while (strategy != null);
 
 			// we have made a pass with all strategies over all interfaces
 			// sleep for a while before we make the next pass
-			elapsedTime = System.currentTimeMillis() - startTime;
+			elapsedTimeMillis = (System.nanoTime() - startTimeNanos) / 1_000_000;
 
-			long toWait = Math.min(maxWaitMillis - elapsedTime, currentSleepTime);
+			long toWait = Math.min(maxWaitMillis - elapsedTimeMillis, currentSleepTime);
 			if (toWait > 0) {
 				if (logging) {
 					LOG.info("Could not connect. Waiting for {} msecs before next attempt", toWait);
@@ -193,11 +184,11 @@ public class ConnectionUtils {
 	 */
 	private static InetAddress tryLocalHostBeforeReturning(
 				InetAddress preliminaryResult, SocketAddress targetAddress, boolean logging) throws IOException {
-		
+
 		InetAddress localhostName = InetAddress.getLocalHost();
-		
+
 		if (preliminaryResult.equals(localhostName)) {
-			// preliminary result is equal to the local host name 
+			// preliminary result is equal to the local host name
 			return preliminaryResult;
 		}
 		else if (tryToConnect(localhostName, targetAddress, AddressDetectionState.SLOW_CONNECT.getTimeout(), logging)) {
@@ -214,7 +205,7 @@ public class ConnectionUtils {
 
 	/**
 	 * Try to find a local address which allows as to connect to the targetAddress using the given
-	 * strategy
+	 * strategy.
 	 *
 	 * @param strategy Depending on the strategy, the method will enumerate all interfaces, trying to connect
 	 *                 to the target address
@@ -225,11 +216,16 @@ public class ConnectionUtils {
 	 */
 	private static InetAddress findAddressUsingStrategy(AddressDetectionState strategy,
 														InetSocketAddress targetAddress,
-														boolean logging) throws IOException
-	{
+														boolean logging) throws IOException {
 		// try LOCAL_HOST strategy independent of the network interfaces
 		if (strategy == AddressDetectionState.LOCAL_HOST) {
-			InetAddress localhostName = InetAddress.getLocalHost();
+			InetAddress localhostName;
+			try {
+				localhostName = InetAddress.getLocalHost();
+			} catch (UnknownHostException uhe) {
+				LOG.warn("Could not resolve local hostname to an IP address: {}", uhe.getMessage());
+				return null;
+			}
 
 			if (tryToConnect(localhostName, targetAddress, strategy.getTimeout(), logging)) {
 				LOG.debug("Using InetAddress.getLocalHost() immediately for the connecting address");
@@ -315,8 +311,7 @@ public class ConnectionUtils {
 	 * @throws IOException Thrown if the socket cleanup fails.
 	 */
 	private static boolean tryToConnect(InetAddress fromAddress, SocketAddress toSocket,
-										int timeout, boolean logFailed) throws IOException
-	{
+										int timeout, boolean logFailed) throws IOException {
 		if (LOG.isDebugEnabled()) {
 			LOG.debug("Trying to connect to (" + toSocket + ") from local address " + fromAddress
 					+ " with timeout " + timeout);
@@ -340,9 +335,12 @@ public class ConnectionUtils {
 		}
 	}
 
+	/**
+	 * A {@link LeaderRetrievalListener} that allows retrieving an {@link InetAddress} for the current leader.
+	 */
 	public static class LeaderConnectingAddressListener implements LeaderRetrievalListener {
 
-		private static final FiniteDuration defaultLoggingDelay = new FiniteDuration(400, TimeUnit.MILLISECONDS);
+		private static final Duration defaultLoggingDelay = Duration.ofMillis(400);
 
 		private enum LeaderRetrievalState {
 			NOT_RETRIEVED,
@@ -350,30 +348,30 @@ public class ConnectionUtils {
 			NEWLY_RETRIEVED
 		}
 
-		final private Object retrievalLock = new Object();
+		private final Object retrievalLock = new Object();
 
 		private String akkaURL;
 		private LeaderRetrievalState retrievalState = LeaderRetrievalState.NOT_RETRIEVED;
 		private Exception exception;
 
 		public InetAddress findConnectingAddress(
-				FiniteDuration timeout) throws LeaderRetrievalException {
+				Duration timeout) throws LeaderRetrievalException {
 			return findConnectingAddress(timeout, defaultLoggingDelay);
 		}
 
 		public InetAddress findConnectingAddress(
-				FiniteDuration timeout,
-				FiniteDuration startLoggingAfter)
-			throws LeaderRetrievalException {
-			long startTime = System.currentTimeMillis();
+				Duration timeout,
+				Duration startLoggingAfter) throws LeaderRetrievalException {
+
+			final long startTimeNanos = System.nanoTime();
 			long currentSleepTime = MIN_SLEEP_TIME;
-			long elapsedTime = 0;
+			long elapsedTimeMillis = 0;
 			InetSocketAddress targetAddress = null;
 
 			try {
-				while (elapsedTime < timeout.toMillis()) {
+				while (elapsedTimeMillis < timeout.toMillis()) {
 
-					long maxTimeout = timeout.toMillis() - elapsedTime;
+					long maxTimeout = timeout.toMillis() - elapsedTimeMillis;
 
 					synchronized (retrievalLock) {
 						if (exception != null) {
@@ -388,9 +386,9 @@ public class ConnectionUtils {
 										"while waiting for the leader retrieval.");
 							}
 						} else if (retrievalState == LeaderRetrievalState.NEWLY_RETRIEVED) {
-							targetAddress = AkkaUtils.getInetSockeAddressFromAkkaURL(akkaURL);
+							targetAddress = AkkaUtils.getInetSocketAddressFromAkkaURL(akkaURL);
 
-							LOG.info("Retrieved new target address {}.", targetAddress);
+							LOG.debug("Retrieved new target address {} for akka URL {}.", targetAddress, akkaURL);
 
 							retrievalState = LeaderRetrievalState.RETRIEVED;
 
@@ -403,7 +401,7 @@ public class ConnectionUtils {
 					if (targetAddress != null) {
 						AddressDetectionState strategy = AddressDetectionState.LOCAL_HOST;
 
-						boolean logging = elapsedTime >= startLoggingAfter.toMillis();
+						boolean logging = elapsedTimeMillis >= startLoggingAfter.toMillis();
 						if (logging) {
 							LOG.info("Trying to connect to address {}", targetAddress);
 						}
@@ -435,10 +433,10 @@ public class ConnectionUtils {
 						while (strategy != null);
 					}
 
-					elapsedTime = System.currentTimeMillis() - startTime;
+					elapsedTimeMillis = (System.nanoTime() - startTimeNanos) / 1_000_000;
 
 					long timeToWait = Math.min(
-							Math.max(timeout.toMillis() - elapsedTime, 0),
+							Math.max(timeout.toMillis() - elapsedTimeMillis, 0),
 							currentSleepTime);
 
 					if (timeToWait > 0) {
@@ -450,7 +448,7 @@ public class ConnectionUtils {
 							}
 						}
 
-						elapsedTime = System.currentTimeMillis() - startTime;
+						elapsedTimeMillis = (System.nanoTime() - startTimeNanos) / 1_000_000;
 					}
 				}
 
@@ -475,7 +473,7 @@ public class ConnectionUtils {
 
 		@Override
 		public void notifyLeaderAddress(String leaderAddress, UUID leaderSessionID) {
-			if (leaderAddress != null && !leaderAddress.equals("")) {
+			if (leaderAddress != null && !leaderAddress.isEmpty()) {
 				synchronized (retrievalLock) {
 					akkaURL = leaderAddress;
 					retrievalState = LeaderRetrievalState.NEWLY_RETRIEVED;

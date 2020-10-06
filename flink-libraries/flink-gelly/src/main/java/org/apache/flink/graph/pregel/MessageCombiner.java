@@ -18,16 +18,16 @@
 
 package org.apache.flink.graph.pregel;
 
-import java.io.Serializable;
-
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.types.Either;
 import org.apache.flink.types.NullValue;
 import org.apache.flink.util.Collector;
 
+import java.io.Serializable;
+
 /**
- * The base class for combining messages sent during a {@link VertexCentricteration}.
- * 
+ * The base class for combining messages sent during a {@link VertexCentricIteration}.
+ *
  * @param <K> The type of the vertex id
  * @param <Message> The type of the message sent between vertices along the edges.
  */
@@ -37,22 +37,19 @@ public abstract class MessageCombiner<K, Message> implements Serializable {
 
 	private Collector<Tuple2<K, Either<NullValue, Message>>> out;
 
-	private K vertexId;
-
 	private Tuple2<K, Either<NullValue, Message>> outValue;
 
 	void set(K target, Collector<Tuple2<K, Either<NullValue, Message>>> collector) {
-		this.vertexId = target;
 		this.out = collector;
-		this.outValue = new Tuple2<K, Either<NullValue, Message>>();
-		outValue.setField(vertexId, 0);
+		this.outValue = new Tuple2<>();
+		outValue.f0 = target;
 	}
 
 	/**
 	 * Combines messages sent from different vertices to a target vertex.
 	 * Implementing this method might reduce communication costs during a vertex-centric
 	 * iteration.
-	 * 
+	 *
 	 * @param messages the input messages to combine
 	 * @throws Exception
 	 */
@@ -60,12 +57,12 @@ public abstract class MessageCombiner<K, Message> implements Serializable {
 
 	/**
 	 * Sends the combined message to the target vertex.
-	 * 
+	 *
 	 * @param combinedMessage
 	 * @throws Exception
 	 */
 	public final void sendCombinedMessage(Message combinedMessage) {
-		outValue.setField(Either.Right(combinedMessage), 1);
+		outValue.f1 = Either.Right(combinedMessage);
 		out.collect(outValue);
 	}
 }

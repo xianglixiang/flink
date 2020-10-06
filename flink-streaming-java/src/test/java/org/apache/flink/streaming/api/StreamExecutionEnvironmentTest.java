@@ -17,19 +17,15 @@
 
 package org.apache.flink.streaming.api;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-import java.util.NoSuchElementException;
-
+import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.api.java.typeutils.GenericTypeInfo;
+import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 import org.apache.flink.streaming.api.functions.source.FromElementsFunction;
@@ -38,10 +34,25 @@ import org.apache.flink.streaming.api.functions.source.StatefulSequenceSource;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.streaming.api.operators.AbstractUdfStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperator;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.Collector;
 import org.apache.flink.util.SplittableIterator;
 
+import org.junit.Assert;
 import org.junit.Test;
 
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+/**
+ * Tests for {@link StreamExecutionEnvironment}.
+ */
 public class StreamExecutionEnvironmentTest {
 
 	@Test
@@ -74,18 +85,18 @@ public class StreamExecutionEnvironmentTest {
 			}
 
 			dataStream1.addSink(new DiscardingSink<Integer>());
-	
+
 			DataStreamSource<Integer> dataStream2 = env.fromParallelCollection(new DummySplittableIterator<Integer>(),
 					typeInfo).setParallelism(4);
 
 			dataStream2.addSink(new DiscardingSink<Integer>());
 
-			env.getExecutionPlan();
+			final StreamGraph streamGraph = env.getStreamGraph();
+			streamGraph.getStreamingPlanAsJSON();
 
-			assertEquals("Parallelism of collection source must be 1.", 1, env.getStreamGraph().getStreamNode(dataStream1.getId()).getParallelism());
+			assertEquals("Parallelism of collection source must be 1.", 1, streamGraph.getStreamNode(dataStream1.getId()).getParallelism());
 			assertEquals("Parallelism of parallel collection source must be 4.",
-					4, 
-					env.getStreamGraph().getStreamNode(dataStream2.getId()).getParallelism());
+					4, streamGraph.getStreamNode(dataStream2.getId()).getParallelism());
 		}
 		catch (Exception e) {
 			e.printStackTrace();
@@ -124,10 +135,143 @@ public class StreamExecutionEnvironmentTest {
 		assertTrue(getFunctionFromDataSource(src4) instanceof FromElementsFunction);
 	}
 
+	@Test
+	public void testParallelismBounds() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+		SourceFunction<Integer> srcFun = new SourceFunction<Integer>() {
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			public void run(SourceContext<Integer> ctx) throws Exception {
+			}
+
+			@Override
+			public void cancel() {
+			}
+		};
+
+		SingleOutputStreamOperator<Object> operator =
+				env.addSource(srcFun).flatMap(new FlatMapFunction<Integer, Object>() {
+
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			public void flatMap(Integer value, Collector<Object> out) throws Exception {
+
+			}
+		});
+
+		// default value for max parallelism
+		Assert.assertEquals(-1, operator.getTransformation().getMaxParallelism());
+
+		// bounds for parallelism 1
+		try {
+			operator.setParallelism(0);
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for parallelism 2
+		operator.setParallelism(1);
+		Assert.assertEquals(1, operator.getParallelism());
+
+		// bounds for parallelism 3
+		operator.setParallelism(1 << 15);
+		Assert.assertEquals(1 << 15, operator.getParallelism());
+
+		// default value after generating
+		env.getStreamGraph(StreamExecutionEnvironment.DEFAULT_JOB_NAME, false).getJobGraph();
+		Assert.assertEquals(-1, operator.getTransformation().getMaxParallelism());
+
+		// configured value after generating
+		env.setMaxParallelism(42);
+		env.getStreamGraph(StreamExecutionEnvironment.DEFAULT_JOB_NAME, false).getJobGraph();
+		Assert.assertEquals(42, operator.getTransformation().getMaxParallelism());
+
+		// bounds configured parallelism 1
+		try {
+			env.setMaxParallelism(0);
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds configured parallelism 2
+		try {
+			env.setMaxParallelism(1 + (1 << 15));
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for max parallelism 1
+		try {
+			operator.setMaxParallelism(0);
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for max parallelism 2
+		try {
+			operator.setMaxParallelism(1 + (1 << 15));
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for max parallelism 3
+		operator.setMaxParallelism(1);
+		Assert.assertEquals(1, operator.getTransformation().getMaxParallelism());
+
+		// bounds for max parallelism 4
+		operator.setMaxParallelism(1 << 15);
+		Assert.assertEquals(1 << 15, operator.getTransformation().getMaxParallelism());
+
+		// override config
+		env.getStreamGraph(StreamExecutionEnvironment.DEFAULT_JOB_NAME, false).getJobGraph();
+		Assert.assertEquals(1 << 15 , operator.getTransformation().getMaxParallelism());
+	}
+
+	@Test
+	public void testGetStreamGraph() {
+		try {
+			TypeInformation<Integer> typeInfo = BasicTypeInfo.INT_TYPE_INFO;
+			StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+			DataStreamSource<Integer> dataStream1 = env.fromCollection(new DummySplittableIterator<Integer>(), typeInfo);
+			dataStream1.addSink(new DiscardingSink<Integer>());
+			assertEquals(2, env.getStreamGraph().getStreamNodes().size());
+
+			DataStreamSource<Integer> dataStream2 = env.fromCollection(new DummySplittableIterator<Integer>(), typeInfo);
+			dataStream2.addSink(new DiscardingSink<Integer>());
+			assertEquals(2, env.getStreamGraph().getStreamNodes().size());
+
+			DataStreamSource<Integer> dataStream3 = env.fromCollection(new DummySplittableIterator<Integer>(), typeInfo);
+			dataStream3.addSink(new DiscardingSink<Integer>());
+			// Does not clear the transformations.
+			env.getExecutionPlan();
+			DataStreamSource<Integer> dataStream4 = env.fromCollection(new DummySplittableIterator<Integer>(), typeInfo);
+			dataStream4.addSink(new DiscardingSink<Integer>());
+			assertEquals(4, env.getStreamGraph("TestJob").getStreamNodes().size());
+		} catch (Exception e) {
+			e.printStackTrace();
+			fail(e.getMessage());
+		}
+	}
+
+	@Test
+	public void testAddSourceWithUserDefinedTypeInfo() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+		DataStreamSource<Row> source1 = env.addSource(new RowSourceFunction(), Types.ROW(Types.STRING));
+		// the source type information should be the user defined type
+		assertEquals(Types.ROW(Types.STRING), source1.getType());
+
+		DataStreamSource<Row> source2 = env.addSource(new RowSourceFunction());
+		// the source type information should be derived from RowSourceFunction#getProducedType
+		assertEquals(new GenericTypeInfo<>(Row.class), source2.getType());
+	}
+
 	/////////////////////////////////////////////////////////////
 	// Utilities
 	/////////////////////////////////////////////////////////////
-
 
 	private static StreamOperator<?> getOperatorFromDataStream(DataStream<?> dataStream) {
 		StreamExecutionEnvironment env = dataStream.getExecutionEnvironment();
@@ -143,7 +287,7 @@ public class StreamExecutionEnvironmentTest {
 		return (SourceFunction<T>) operator.getUserFunction();
 	}
 
-	public static class DummySplittableIterator<T> extends SplittableIterator<T> {
+	private static class DummySplittableIterator<T> extends SplittableIterator<T> {
 		private static final long serialVersionUID = 1312752876092210499L;
 
 		@SuppressWarnings("unchecked")
@@ -173,7 +317,7 @@ public class StreamExecutionEnvironmentTest {
 		}
 	}
 
-	public static class ParentClass {
+	private static class ParentClass {
 		int num;
 		String string;
 		public ParentClass(int num, String string) {
@@ -182,9 +326,26 @@ public class StreamExecutionEnvironmentTest {
 		}
 	}
 
-	public static class SubClass extends ParentClass{
+	private static class SubClass extends ParentClass{
 		public SubClass(int num, String string) {
 			super(num, string);
+		}
+	}
+
+	private static class RowSourceFunction implements SourceFunction<Row>, ResultTypeQueryable<Row> {
+		private static final long serialVersionUID = 5216362688122691404L;
+
+		@Override
+		public TypeInformation<Row> getProducedType() {
+			return TypeInformation.of(Row.class);
+		}
+
+		@Override
+		public void run(SourceContext<Row> ctx) throws Exception {
+		}
+
+		@Override
+		public void cancel() {
 		}
 	}
 }

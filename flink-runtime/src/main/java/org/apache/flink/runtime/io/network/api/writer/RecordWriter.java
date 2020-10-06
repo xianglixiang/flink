@@ -18,224 +18,247 @@
 
 package org.apache.flink.runtime.io.network.api.writer;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.core.io.IOReadableWritable;
-import org.apache.flink.metrics.groups.IOMetricGroup;
-import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
+import org.apache.flink.core.memory.DataOutputSerializer;
 import org.apache.flink.runtime.event.AbstractEvent;
-import org.apache.flink.runtime.io.network.api.serialization.RecordSerializer;
-import org.apache.flink.runtime.io.network.api.serialization.SpanningRecordSerializer;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.apache.flink.runtime.io.AvailabilityProvider;
+import org.apache.flink.runtime.metrics.groups.TaskIOMetricGroup;
+import org.apache.flink.util.XORShiftRandom;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 
-import static org.apache.flink.runtime.io.network.api.serialization.RecordSerializer.SerializationResult;
+import static org.apache.flink.util.Preconditions.checkArgument;
 
 /**
- * A record-oriented runtime result writer.
- * <p>
- * The RecordWriter wraps the runtime's {@link ResultPartitionWriter} and takes care of
- * serializing records into buffers.
- * <p>
- * <strong>Important</strong>: it is necessary to call {@link #flush()} after
- * all records have been written with {@link #emit(IOReadableWritable)}. This
- * ensures that all produced records are written to the output stream (incl.
- * partially filled ones).
+ * An abstract record-oriented runtime result writer.
+ *
+ * <p>The RecordWriter wraps the runtime's {@link ResultPartitionWriter} and takes care of
+ * channel selection and serializing records into bytes.
  *
  * @param <T> the type of the record that can be emitted with this record writer
  */
-public class RecordWriter<T extends IOReadableWritable> {
+public abstract class RecordWriter<T extends IOReadableWritable> implements AvailabilityProvider {
 
-	protected final ResultPartitionWriter writer;
+	/** Default name for the output flush thread, if no name with a task reference is given. */
+	@VisibleForTesting
+	public static final String DEFAULT_OUTPUT_FLUSH_THREAD_NAME = "OutputFlusher";
 
-	private final ChannelSelector<T> channelSelector;
+	private static final Logger LOG = LoggerFactory.getLogger(RecordWriter.class);
 
-	private final int numChannels;
+	protected final ResultPartitionWriter targetPartition;
 
-	/** {@link RecordSerializer} per outgoing channel */
-	private final RecordSerializer<T>[] serializers;
+	protected final int numberOfChannels;
 
-	public RecordWriter(ResultPartitionWriter writer) {
-		this(writer, new RoundRobinChannelSelector<T>());
-	}
+	protected final DataOutputSerializer serializer;
 
-	@SuppressWarnings("unchecked")
-	public RecordWriter(ResultPartitionWriter writer, ChannelSelector<T> channelSelector) {
-		this.writer = writer;
-		this.channelSelector = channelSelector;
+	protected final Random rng = new XORShiftRandom();
 
-		this.numChannels = writer.getNumberOfOutputChannels();
+	protected final boolean flushAlways;
 
-		/**
-		 * The runtime exposes a channel abstraction for the produced results
-		 * (see {@link ChannelSelector}). Every channel has an independent
-		 * serializer.
-		 */
-		this.serializers = new SpanningRecordSerializer[numChannels];
-		for (int i = 0; i < numChannels; i++) {
-			serializers[i] = new SpanningRecordSerializer<T>();
+	/** The thread that periodically flushes the output, to give an upper latency bound. */
+	@Nullable
+	private final OutputFlusher outputFlusher;
+
+	/** To avoid synchronization overhead on the critical path, best-effort error tracking is enough here.*/
+	private Throwable flusherException;
+	private volatile Throwable volatileFlusherException;
+	private int volatileFlusherExceptionCheckSkipCount;
+	private static final int VOLATILE_FLUSHER_EXCEPTION_MAX_CHECK_SKIP_COUNT = 100;
+
+	RecordWriter(ResultPartitionWriter writer, long timeout, String taskName) {
+		this.targetPartition = writer;
+		this.numberOfChannels = writer.getNumberOfSubpartitions();
+
+		this.serializer = new DataOutputSerializer(128);
+
+		checkArgument(timeout >= -1);
+		this.flushAlways = (timeout == 0);
+		if (timeout == -1 || timeout == 0) {
+			outputFlusher = null;
+		} else {
+			String threadName = taskName == null ?
+				DEFAULT_OUTPUT_FLUSH_THREAD_NAME :
+				DEFAULT_OUTPUT_FLUSH_THREAD_NAME + " for " + taskName;
+
+			outputFlusher = new OutputFlusher(threadName, timeout);
+			outputFlusher.start();
 		}
 	}
 
-	public void emit(T record) throws IOException, InterruptedException {
-		for (int targetChannel : channelSelector.selectChannels(record, numChannels)) {
-			// serialize with corresponding serializer and send full buffer
-			RecordSerializer<T> serializer = serializers[targetChannel];
+	protected void emit(T record, int targetSubpartition) throws IOException {
+		checkErroneous();
 
-			synchronized (serializer) {
-				SerializationResult result = serializer.addRecord(record);
-				while (result.isFullBuffer()) {
-					Buffer buffer = serializer.getCurrentBuffer();
+		targetPartition.emitRecord(serializeRecord(serializer, record), targetSubpartition);
 
-					if (buffer != null) {
-						writeBuffer(buffer, targetChannel, serializer);
-					}
-
-					buffer = writer.getBufferProvider().requestBufferBlocking();
-					result = serializer.setNextBuffer(buffer);
-				}
-			}
+		if (flushAlways) {
+			targetPartition.flush(targetSubpartition);
 		}
 	}
 
-	/**
-	 * This is used to broadcast Streaming Watermarks in-band with records. This ignores
-	 * the {@link ChannelSelector}.
-	 */
-	public void broadcastEmit(T record) throws IOException, InterruptedException {
-		for (int targetChannel = 0; targetChannel < numChannels; targetChannel++) {
-			// serialize with corresponding serializer and send full buffer
-			RecordSerializer<T> serializer = serializers[targetChannel];
+	public void broadcastEvent(AbstractEvent event) throws IOException {
+		broadcastEvent(event, false);
+	}
 
-			synchronized (serializer) {
-				SerializationResult result = serializer.addRecord(record);
-				while (result.isFullBuffer()) {
-					Buffer buffer = serializer.getCurrentBuffer();
+	public void broadcastEvent(AbstractEvent event, boolean isPriorityEvent) throws IOException {
+		targetPartition.broadcastEvent(event, isPriorityEvent);
 
-					if (buffer != null) {
-						writeBuffer(buffer, targetChannel, serializer);
-					}
-
-					buffer = writer.getBufferProvider().requestBufferBlocking();
-					result = serializer.setNextBuffer(buffer);
-				}
-			}
+		if (flushAlways) {
+			flushAll();
 		}
 	}
 
-	public void broadcastEvent(AbstractEvent event) throws IOException, InterruptedException {
-		for (int targetChannel = 0; targetChannel < numChannels; targetChannel++) {
-			RecordSerializer<T> serializer = serializers[targetChannel];
+	@VisibleForTesting
+	public static ByteBuffer serializeRecord(
+			DataOutputSerializer serializer,
+			IOReadableWritable record) throws IOException {
+		// the initial capacity should be no less than 4 bytes
+		serializer.setPositionUnsafe(4);
 
-			synchronized (serializer) {
+		// write data
+		record.write(serializer);
 
-				if (serializer.hasData()) {
-					Buffer buffer = serializer.getCurrentBuffer();
-					if (buffer == null) {
-						throw new IllegalStateException("Serializer has data but no buffer.");
-					}
+		// write length
+		serializer.writeIntUnsafe(serializer.length() - 4, 0);
 
-					writeBuffer(buffer, targetChannel, serializer);
-
-					writer.writeEvent(event, targetChannel);
-
-					buffer = writer.getBufferProvider().requestBufferBlocking();
-					serializer.setNextBuffer(buffer);
-				}
-				else {
-					writer.writeEvent(event, targetChannel);
-				}
-			}
-		}
+		return serializer.wrapAsByteBuffer();
 	}
 
-	public void sendEndOfSuperstep() throws IOException, InterruptedException {
-		for (int targetChannel = 0; targetChannel < numChannels; targetChannel++) {
-			RecordSerializer<T> serializer = serializers[targetChannel];
-
-			synchronized (serializer) {
-				Buffer buffer = serializer.getCurrentBuffer();
-				if (buffer != null) {
-					writeBuffer(buffer, targetChannel, serializer);
-
-					buffer = writer.getBufferProvider().requestBufferBlocking();
-					serializer.setNextBuffer(buffer);
-				}
-			}
-		}
-
-		writer.writeEndOfSuperstep();
-	}
-
-	public void flush() throws IOException {
-		for (int targetChannel = 0; targetChannel < numChannels; targetChannel++) {
-			RecordSerializer<T> serializer = serializers[targetChannel];
-
-			synchronized (serializer) {
-				try {
-					Buffer buffer = serializer.getCurrentBuffer();
-
-					if (buffer != null) {
-						writeBuffer(buffer, targetChannel, serializer);
-					}
-				} finally {
-					serializer.clear();
-				}
-			}
-		}
-	}
-
-	public void clearBuffers() {
-		for (RecordSerializer<?> serializer : serializers) {
-			synchronized (serializer) {
-				try {
-					Buffer buffer = serializer.getCurrentBuffer();
-
-					if (buffer != null) {
-						buffer.recycle();
-					}
-				}
-				finally {
-					serializer.clear();
-				}
-			}
-		}
-	}
-
-	/**
-	 * Counter for the number of records emitted and the records processed.
-	 */
-	public void setReporter(AccumulatorRegistry.Reporter reporter) {
-		for(RecordSerializer<?> serializer : serializers) {
-			serializer.setReporter(reporter);
-		}
+	public void flushAll() {
+		targetPartition.flushAll();
 	}
 
 	/**
 	 * Sets the metric group for this RecordWriter.
-	 * @param metrics
      */
-	public void setMetricGroup(IOMetricGroup metrics) {
-		for(RecordSerializer<?> serializer : serializers) {
-			serializer.instantiateMetrics(metrics);
+	public void setMetricGroup(TaskIOMetricGroup metrics) {
+		targetPartition.setMetricGroup(metrics);
+	}
+
+	@Override
+	public CompletableFuture<?> getAvailableFuture() {
+		return targetPartition.getAvailableFuture();
+	}
+
+	/**
+	 * This is used to send regular records.
+	 */
+	public abstract void emit(T record) throws IOException;
+
+	/**
+	 * This is used to send LatencyMarks to a random target channel.
+	 */
+	public void randomEmit(T record) throws IOException {
+		checkErroneous();
+
+		int targetSubpartition = rng.nextInt(numberOfChannels);
+		emit(record, targetSubpartition);
+	}
+
+	/**
+	 * This is used to broadcast streaming Watermarks in-band with records.
+	 */
+	public abstract void broadcastEmit(T record) throws IOException;
+
+	/**
+	 * Closes the writer. This stops the flushing thread (if there is one).
+	 */
+	public void close() {
+		// make sure we terminate the thread in any case
+		if (outputFlusher != null) {
+			outputFlusher.terminate();
+			try {
+				outputFlusher.join();
+			} catch (InterruptedException e) {
+				// ignore on close
+				// restore interrupt flag to fast exit further blocking calls
+				Thread.currentThread().interrupt();
+			}
 		}
 	}
 
 	/**
-	 * Writes the buffer to the {@link ResultPartitionWriter}.
+	 * Notifies the writer that the output flusher thread encountered an exception.
 	 *
-	 * <p> The buffer is cleared from the serializer state after a call to this method.
+	 * @param t The exception to report.
 	 */
-	private void writeBuffer(
-			Buffer buffer,
-			int targetChannel,
-			RecordSerializer<T> serializer) throws IOException {
-
-		try {
-			writer.writeBuffer(buffer, targetChannel);
-		}
-		finally {
-			serializer.clearCurrentBuffer();
+	private void notifyFlusherException(Throwable t) {
+		if (flusherException == null) {
+			LOG.error("An exception happened while flushing the outputs", t);
+			flusherException = t;
+			volatileFlusherException = t;
 		}
 	}
 
+	protected void checkErroneous() throws IOException {
+		// For performance reasons, we are not checking volatile field every single time.
+		if (flusherException != null ||
+				(volatileFlusherExceptionCheckSkipCount >= VOLATILE_FLUSHER_EXCEPTION_MAX_CHECK_SKIP_COUNT && volatileFlusherException != null)) {
+			throw new IOException("An exception happened while flushing the outputs", volatileFlusherException);
+		}
+		if (++volatileFlusherExceptionCheckSkipCount >= VOLATILE_FLUSHER_EXCEPTION_MAX_CHECK_SKIP_COUNT) {
+			volatileFlusherExceptionCheckSkipCount = 0;
+		}
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * A dedicated thread that periodically flushes the output buffers, to set upper latency bounds.
+	 *
+	 * <p>The thread is daemonic, because it is only a utility thread.
+	 */
+	private class OutputFlusher extends Thread {
+
+		private final long timeout;
+
+		private volatile boolean running = true;
+
+		OutputFlusher(String name, long timeout) {
+			super(name);
+			setDaemon(true);
+			this.timeout = timeout;
+		}
+
+		public void terminate() {
+			running = false;
+			interrupt();
+		}
+
+		@Override
+		public void run() {
+			try {
+				while (running) {
+					try {
+						Thread.sleep(timeout);
+					} catch (InterruptedException e) {
+						// propagate this if we are still running, because it should not happen
+						// in that case
+						if (running) {
+							throw new Exception(e);
+						}
+					}
+
+					// any errors here should let the thread come to a halt and be
+					// recognized by the writer
+					flushAll();
+				}
+			} catch (Throwable t) {
+				notifyFlusherException(t);
+			}
+		}
+	}
+
+	@VisibleForTesting
+	ResultPartitionWriter getTargetPartition() {
+		return targetPartition;
+	}
 }

@@ -18,16 +18,23 @@
 
 package org.apache.flink.runtime.io.network.buffer;
 
-import org.apache.flink.core.memory.MemoryType;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.Timeout;
 
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+/**
+ * Tests for the destruction of a {@link LocalBufferPool}.
+ */
 public class LocalBufferPoolDestroyTest {
+	@Rule
+	public Timeout timeout = new Timeout(10, TimeUnit.SECONDS);
 
 	/**
 	 * Tests that a blocking request fails properly if the buffer pool is
@@ -39,14 +46,14 @@ public class LocalBufferPoolDestroyTest {
 	 * request Thread threw the expected Exception.
 	 */
 	@Test
-	public void testDestroyWhileBlockingRequest() throws Exception {
+	public void testDestroyWhileBlockingRequest() throws InterruptedException {
 		AtomicReference<Exception> asyncException = new AtomicReference<>();
 
 		NetworkBufferPool networkBufferPool = null;
 		LocalBufferPool localBufferPool = null;
 
 		try {
-			networkBufferPool = new NetworkBufferPool(1, 4096, MemoryType.HEAP);
+			networkBufferPool = new NetworkBufferPool(1, 4096);
 			localBufferPool = new LocalBufferPool(networkBufferPool, 1);
 
 			// Drain buffer pool
@@ -105,11 +112,10 @@ public class LocalBufferPoolDestroyTest {
 	 * @return Flag indicating whether the Thread is in a blocking buffer
 	 * request or not
 	 */
-	private boolean isInBlockingBufferRequest(StackTraceElement[] stackTrace) {
-		if (stackTrace.length >= 3) {
-			return stackTrace[0].getMethodName().equals("wait") &&
-					stackTrace[1].getMethodName().equals("requestBuffer") &&
-					stackTrace[2].getMethodName().equals("requestBufferBlocking");
+	public static boolean isInBlockingBufferRequest(StackTraceElement[] stackTrace) {
+		if (stackTrace.length >= 8) {
+			return stackTrace[5].getMethodName().equals("get") &&
+					stackTrace[7].getClassName().equals(LocalBufferPool.class.getName());
 		} else {
 			return false;
 		}
@@ -135,7 +141,7 @@ public class LocalBufferPoolDestroyTest {
 				String msg = "Test assumption violated: expected no available buffer";
 				assertNull(msg, bufferPool.requestBuffer());
 
-				bufferPool.requestBufferBlocking();
+				bufferPool.requestBufferBuilderBlocking();
 			} catch (Exception t) {
 				asyncException.set(t);
 			}

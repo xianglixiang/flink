@@ -26,15 +26,16 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
 import org.apache.flink.api.java.typeutils.ValueTypeInfo;
-import org.apache.flink.api.java.typeutils.runtime.RuntimeSerializerFactory;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.runtime.memory.MemoryManagerBuilder;
 import org.apache.flink.runtime.operators.testutils.DummyInvokable;
 import org.apache.flink.util.MutableObjectIterator;
+import org.apache.flink.util.TestLogger;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -49,7 +50,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 
-public class ExternalSortLargeRecordsITCase {
+public class ExternalSortLargeRecordsITCase extends TestLogger {
 
 	private static final int MEMORY_SIZE = 1024 * 1024 * 78;
 	
@@ -65,16 +66,13 @@ public class ExternalSortLargeRecordsITCase {
 
 	@Before
 	public void beforeTest() {
-		this.memoryManager = new MemoryManager(MEMORY_SIZE, 1);
+		this.memoryManager = MemoryManagerBuilder.newBuilder().setMemorySize(MEMORY_SIZE).build();
 		this.ioManager = new IOManagerAsync();
 	}
 
 	@After
-	public void afterTest() {
-		this.ioManager.shutdown();
-		if (!this.ioManager.isProperlyShutDown()) {
-			Assert.fail("I/O Manager was not properly shut down.");
-		}
+	public void afterTest() throws Exception {
+		this.ioManager.close();
 		
 		if (this.memoryManager != null && testSuccess) {
 			Assert.assertTrue("Memory leak: not all segments have been returned to the memory manager.", 
@@ -122,14 +120,21 @@ public class ExternalSortLargeRecordsITCase {
 							}
 						}
 					};
-			
-			@SuppressWarnings("unchecked")
-			Sorter<Tuple2<Long, SomeMaybeLongValue>> sorter = new UnilateralSortMerger<Tuple2<Long, SomeMaybeLongValue>>(
-					this.memoryManager, this.ioManager, 
-					source, this.parentTask,
-					new RuntimeSerializerFactory<Tuple2<Long, SomeMaybeLongValue>>(serializer, (Class<Tuple2<Long, SomeMaybeLongValue>>) (Class<?>) Tuple2.class),
-					comparator, 1.0, 1, 128, 0.7f, true /* use large record handler */ , false);
-			
+
+			Sorter<Tuple2<Long, SomeMaybeLongValue>> sorter =
+				ExternalSorter.newBuilder(
+						this.memoryManager,
+						this.parentTask,
+						serializer,
+						comparator)
+					.maxNumFileHandles(128)
+					.sortBuffers(1)
+					.enableSpilling(ioManager, 0.7f)
+					.memoryFraction(1.0)
+					.objectReuse(false)
+					.largeRecords(true)
+					.build(source);
+
 			// check order
 			MutableObjectIterator<Tuple2<Long, SomeMaybeLongValue>> iterator = sorter.getIterator();
 			
@@ -193,13 +198,20 @@ public class ExternalSortLargeRecordsITCase {
 						}
 					};
 			
-			@SuppressWarnings("unchecked")
-			Sorter<Tuple2<Long, SomeMaybeLongValue>> sorter = new UnilateralSortMerger<Tuple2<Long, SomeMaybeLongValue>>(
-					this.memoryManager, this.ioManager, 
-					source, this.parentTask,
-					new RuntimeSerializerFactory<Tuple2<Long, SomeMaybeLongValue>>(serializer, (Class<Tuple2<Long, SomeMaybeLongValue>>) (Class<?>) Tuple2.class),
-					comparator, 1.0, 1, 128, 0.7f, true /*use large record handler*/, true);
-			
+			Sorter<Tuple2<Long, SomeMaybeLongValue>> sorter =
+				ExternalSorter.newBuilder(
+						this.memoryManager,
+						this.parentTask,
+						serializer,
+						comparator)
+					.maxNumFileHandles(128)
+					.sortBuffers(1)
+					.enableSpilling(ioManager, 0.7f)
+					.memoryFraction(1.0)
+					.objectReuse(true)
+					.largeRecords(true)
+					.build(source);
+
 			// check order
 			MutableObjectIterator<Tuple2<Long, SomeMaybeLongValue>> iterator = sorter.getIterator();
 			
@@ -277,26 +289,30 @@ public class ExternalSortLargeRecordsITCase {
 							}
 						}
 					};
-			
-			@SuppressWarnings("unchecked")
-			Sorter<Tuple2<Long, SmallOrMediumOrLargeValue>> sorter = new UnilateralSortMerger<Tuple2<Long, SmallOrMediumOrLargeValue>>(
-					this.memoryManager, this.ioManager, 
-					source, this.parentTask,
-					new RuntimeSerializerFactory<Tuple2<Long, SmallOrMediumOrLargeValue>>(serializer, (Class<Tuple2<Long, SmallOrMediumOrLargeValue>>) (Class<?>) Tuple2.class),
-					comparator, 1.0, 1, 128, 0.7f, true /*use large record handler*/, false);
-			
+
+			Sorter<Tuple2<Long, SmallOrMediumOrLargeValue>> sorter =
+				ExternalSorter.newBuilder(
+						this.memoryManager,
+						this.parentTask,
+						serializer,
+						comparator)
+					.maxNumFileHandles(128)
+					.sortBuffers(1)
+					.enableSpilling(ioManager, 0.7f)
+					.memoryFraction(1.0)
+					.objectReuse(false)
+					.largeRecords(true)
+					.build(source);
+
 			// check order
 			MutableObjectIterator<Tuple2<Long, SmallOrMediumOrLargeValue>> iterator = sorter.getIterator();
 			
 			Tuple2<Long, SmallOrMediumOrLargeValue> val = serializer.createInstance();
-			
-			long prevKey = Long.MAX_VALUE;
 
 			for (int i = 0; i < NUM_RECORDS; i++) {
 				val = iterator.next(val);
-				
-				assertTrue(val.f0 <= prevKey);
-				assertTrue(val.f0.intValue() == val.f1.val());
+
+				assertEquals(val.f0.intValue(), val.f1.val());
 			}
 			
 			assertNull(iterator.next(val));
@@ -349,13 +365,20 @@ public class ExternalSortLargeRecordsITCase {
 						}
 					};
 			
-			@SuppressWarnings("unchecked")
-			Sorter<Tuple2<Long, SmallOrMediumOrLargeValue>> sorter = new UnilateralSortMerger<Tuple2<Long, SmallOrMediumOrLargeValue>>(
-					this.memoryManager, this.ioManager, 
-					source, this.parentTask,
-					new RuntimeSerializerFactory<Tuple2<Long, SmallOrMediumOrLargeValue>>(serializer, (Class<Tuple2<Long, SmallOrMediumOrLargeValue>>) (Class<?>) Tuple2.class),
-					comparator, 1.0, 1, 128, 0.7f, true /*use large record handler*/, true);
-			
+			Sorter<Tuple2<Long, SmallOrMediumOrLargeValue>> sorter =
+				ExternalSorter.newBuilder(
+						this.memoryManager,
+						this.parentTask,
+						serializer,
+						comparator)
+					.maxNumFileHandles(128)
+					.sortBuffers(1)
+					.enableSpilling(ioManager, 0.7f)
+					.memoryFraction(1.0)
+					.objectReuse(true)
+					.largeRecords(true)
+					.build(source);
+
 			// check order
 			MutableObjectIterator<Tuple2<Long, SmallOrMediumOrLargeValue>> iterator = sorter.getIterator();
 			

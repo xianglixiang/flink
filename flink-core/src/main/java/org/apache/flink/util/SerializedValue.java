@@ -28,7 +28,7 @@ import java.util.Arrays;
  * in the system class loader. When those objects are deserialized without access to their
  * special class loader, the deserialization fails with a {@code ClassNotFoundException}.
  *
- * To work around that issue, the SerializedValue serialized data immediately into a byte array.
+ * <p>To work around that issue, the SerializedValue serialized data immediately into a byte array.
  * When send through RPC or another service that uses serialization, only the byte array is
  * transferred. The object is deserialized later (upon access) and requires the accessor to
  * provide the corresponding class loader.
@@ -40,34 +40,38 @@ public class SerializedValue<T> implements java.io.Serializable {
 
 	private static final long serialVersionUID = -3564011643393683761L;
 
-	/** The serialized data */
+	/** The serialized data. */
 	private final byte[] serializedData;
 
+	private SerializedValue(byte[] serializedData) {
+		Preconditions.checkNotNull(serializedData, "Serialized data");
+		this.serializedData = serializedData;
+	}
 
 	public SerializedValue(T value) throws IOException {
 		this.serializedData = value == null ? null : InstantiationUtil.serializeObject(value);
 	}
 
-
 	@SuppressWarnings("unchecked")
 	public T deserializeValue(ClassLoader loader) throws IOException, ClassNotFoundException {
-		if (loader == null) {
-			throw new NullPointerException("No classloader has been passed");
-		}
-
+		Preconditions.checkNotNull(loader, "No classloader has been passed");
 		return serializedData == null ? null : (T) InstantiationUtil.deserializeObject(serializedData, loader);
 	}
 
 	/**
-	 * Gets the size of the serialized state.
-	 * @return The size of the serialized state.
+	 * Returns the serialized value or <code>null</code> if no value is set.
+	 *
+	 * @return Serialized data.
 	 */
-	public int getSizeOfSerializedState() {
-		return serializedData.length;
+	public byte[] getByteArray() {
+		return serializedData;
+	}
+
+	public static <T> SerializedValue<T> fromBytes(byte[] serializedData) {
+		return new SerializedValue<>(serializedData);
 	}
 
 	// --------------------------------------------------------------------------------------------
-
 
 	@Override
 	public int hashCode() {

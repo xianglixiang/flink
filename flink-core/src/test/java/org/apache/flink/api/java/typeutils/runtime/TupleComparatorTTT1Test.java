@@ -17,20 +17,19 @@
  */
 package org.apache.flink.api.java.typeutils.runtime;
 
-import static org.junit.Assert.assertEquals;
 import org.apache.flink.api.common.typeutils.TypeComparator;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.base.DoubleComparator;
 import org.apache.flink.api.common.typeutils.base.DoubleSerializer;
-import org.apache.flink.api.common.typeutils.base.IntComparator;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
-import org.apache.flink.api.common.typeutils.base.LongComparator;
 import org.apache.flink.api.common.typeutils.base.LongSerializer;
 import org.apache.flink.api.common.typeutils.base.StringComparator;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.typeutils.runtime.tuple.base.TupleComparatorTestBase;
+
+import static org.junit.Assert.assertEquals;
 
 public class TupleComparatorTTT1Test extends TupleComparatorTestBase<Tuple3<Tuple2<String, Double>, Tuple2<Long, Long>, Tuple2<Integer, Long>>> {
 
@@ -133,7 +132,7 @@ public class TupleComparatorTTT1Test extends TupleComparatorTestBase<Tuple3<Tupl
 	
 	protected void deepEquals(String message, Tuple2<?,?> should, Tuple2<?,?> is) {
 		for (int x = 0; x < should.getArity(); x++) {
-			assertEquals(message, should.getField(x), is.getField(x));
+			assertEquals(message, (Object)should.getField(x), is.getField(x));
 		}
 	}
 }

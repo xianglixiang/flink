@@ -25,6 +25,7 @@ import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.ListMemorySegmentSource;
 import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.runtime.memory.MemoryManagerBuilder;
 import org.apache.flink.runtime.operators.testutils.DummyInvokable;
 import org.apache.flink.runtime.operators.testutils.TestData;
 import org.apache.flink.runtime.operators.testutils.TestData.TupleGenerator.KeyMode;
@@ -66,16 +67,13 @@ public class SpillingBufferTest {
 
 	@Before
 	public void beforeTest() {
-		memoryManager = new MemoryManager(MEMORY_SIZE, 1);
+		memoryManager = MemoryManagerBuilder.newBuilder().setMemorySize(MEMORY_SIZE).build();
 		ioManager = new IOManagerAsync();
 	}
 
 	@After
-	public void afterTest() {
-		ioManager.shutdown();
-		if (!ioManager.isProperlyShutDown()) {
-			Assert.fail("I/O Manager was not properly shut down.");
-		}
+	public void afterTest() throws Exception {
+		ioManager.close();
 		
 		if (memoryManager != null) {
 			Assert.assertTrue("Memory leak: not all segments have been returned to the memory manager.", 
@@ -109,7 +107,7 @@ public class SpillingBufferTest {
 		DataInputView inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		final Tuple2<Integer, String> readRec = new Tuple2<>();
 		for (int i = 0; i < NUM_PAIRS_INMEM; i++) {
 			generator.next(rec);
@@ -121,14 +119,14 @@ public class SpillingBufferTest {
 			int k2 = readRec.f0;
 			String v2 = readRec.f1;
 			
-			Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+			Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 		}
 		
-		// re-read the data
+		// re-notifyNonEmpty the data
 		inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		for (int i = 0; i < NUM_PAIRS_INMEM; i++) {
 			generator.next(rec);
 			serializer.deserialize(readRec, inView);
@@ -139,7 +137,7 @@ public class SpillingBufferTest {
 			int k2 = readRec.f0;
 			String v2 = readRec.f1;
 			
-			Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+			Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 		}
 		
 		this.memoryManager.release(outView.close());
@@ -169,7 +167,7 @@ public class SpillingBufferTest {
 		DataInputView inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		final Tuple2<Integer, String> readRec = new Tuple2<>();
 		try {
 			for (int i = 0; i < NUM_PAIRS_INMEM + 1; i++) {
@@ -182,7 +180,7 @@ public class SpillingBufferTest {
 				int k2 = readRec.f0;
 				String v2 = readRec.f1;
 				
-				Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+				Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 			}
 			Assert.fail("Read too much, expected EOFException.");
 		}
@@ -190,11 +188,11 @@ public class SpillingBufferTest {
 			// expected
 		}
 		
-		// re-read the data
+		// re-notifyNonEmpty the data
 		inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		for (int i = 0; i < NUM_PAIRS_INMEM; i++) {
 			generator.next(rec);
 			serializer.deserialize(readRec, inView);
@@ -205,7 +203,7 @@ public class SpillingBufferTest {
 			int k2 = readRec.f0;
 			String v2 = readRec.f1;
 			
-			Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+			Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 		}
 		
 		this.memoryManager.release(outView.close());
@@ -237,7 +235,7 @@ public class SpillingBufferTest {
 		DataInputView inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		final Tuple2<Integer, String> readRec = new Tuple2<>();
 		for (int i = 0; i < NUM_PAIRS_EXTERNAL; i++) {
 			generator.next(rec);
@@ -249,14 +247,14 @@ public class SpillingBufferTest {
 			int k2 = readRec.f0;
 			String v2 = readRec.f1;
 			
-			Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+			Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 		}
 		
-		// re-read the data
+		// re-notifyNonEmpty the data
 		inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		for (int i = 0; i < NUM_PAIRS_EXTERNAL; i++) {
 			generator.next(rec);
 			serializer.deserialize(readRec, inView);
@@ -267,7 +265,7 @@ public class SpillingBufferTest {
 			int k2 = readRec.f0;
 			String v2 = readRec.f1;
 			
-			Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+			Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 		}
 		
 		this.memoryManager.release(outView.close());
@@ -297,7 +295,7 @@ public class SpillingBufferTest {
 		DataInputView inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		final Tuple2<Integer, String> readRec = new Tuple2<>();
 		try {
 			for (int i = 0; i < NUM_PAIRS_EXTERNAL + 1; i++) {
@@ -310,7 +308,7 @@ public class SpillingBufferTest {
 				int k2 = readRec.f0;
 				String v2 = readRec.f1;
 				
-				Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+				Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 			}
 			Assert.fail("Read too much, expected EOFException.");
 		}
@@ -318,11 +316,11 @@ public class SpillingBufferTest {
 			// expected
 		}
 		
-		// re-read the data
+		// re-notifyNonEmpty the data
 		inView = outView.flip();
 		generator.reset();
 		
-		// read and re-generate all records and compare them
+		// notifyNonEmpty and re-generate all records and compare them
 		for (int i = 0; i < NUM_PAIRS_EXTERNAL; i++) {
 			generator.next(rec);
 			serializer.deserialize(readRec, inView);
@@ -333,7 +331,7 @@ public class SpillingBufferTest {
 			int k2 = readRec.f0;
 			String v2 = readRec.f1;
 			
-			Assert.assertTrue("The re-generated and the read record do not match.", k1 == k2 && v1.equals(v2));
+			Assert.assertTrue("The re-generated and the notifyNonEmpty record do not match.", k1 == k2 && v1.equals(v2));
 		}
 		
 		this.memoryManager.release(outView.close());

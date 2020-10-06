@@ -19,14 +19,11 @@
 package org.apache.flink.graph.asm.simple.directed;
 
 import org.apache.flink.api.common.functions.FilterFunction;
+import org.apache.flink.api.common.operators.base.ReduceOperatorBase.CombineHint;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
-import org.apache.flink.graph.utils.proxy.GraphAlgorithmDelegatingGraph;
-import org.apache.flink.types.CopyableValue;
-import org.apache.flink.util.Preconditions;
-
-import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
+import org.apache.flink.graph.utils.proxy.GraphAlgorithmWrappingGraph;
 
 /**
  * Remove self-loops and duplicate edges from a directed graph.
@@ -35,46 +32,8 @@ import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
  * @param <VV> vertex value type
  * @param <EV> edge value type
  */
-public class Simplify<K extends Comparable<K> & CopyableValue<K>, VV, EV>
-extends GraphAlgorithmDelegatingGraph<K, VV, EV, K, VV, EV> {
-
-	// Optional configuration
-	private int parallelism = PARALLELISM_DEFAULT;
-
-	/**
-	 * Override the operator parallelism.
-	 *
-	 * @param parallelism operator parallelism
-	 * @return this
-	 */
-	public Simplify<K, VV, EV> setParallelism(int parallelism) {
-		Preconditions.checkArgument(parallelism > 0 || parallelism == PARALLELISM_DEFAULT,
-			"The parallelism must be greater than zero.");
-
-		this.parallelism = parallelism;
-
-		return this;
-	}
-
-	@Override
-	protected String getAlgorithmName() {
-		return Simplify.class.getName();
-	}
-
-	@Override
-	protected boolean mergeConfiguration(GraphAlgorithmDelegatingGraph other) {
-		Preconditions.checkNotNull(other);
-
-		if (! Simplify.class.isAssignableFrom(other.getClass())) {
-			return false;
-		}
-
-		Simplify rhs = (Simplify) other;
-
-		parallelism = Math.min(parallelism, rhs.parallelism);
-
-		return true;
-	}
+public class Simplify<K extends Comparable<K>, VV, EV>
+extends GraphAlgorithmWrappingGraph<K, VV, EV, K, VV, EV> {
 
 	@Override
 	public Graph<K, VV, EV> runInternal(Graph<K, VV, EV> input)
@@ -82,10 +41,11 @@ extends GraphAlgorithmDelegatingGraph<K, VV, EV, K, VV, EV> {
 		// Edges
 		DataSet<Edge<K, EV>> edges = input
 			.getEdges()
-			.filter(new RemoveSelfLoops<K, EV>())
+			.filter(new RemoveSelfLoops<>())
 				.setParallelism(parallelism)
 				.name("Remove self-loops")
 			.distinct(0, 1)
+				.setCombineHint(CombineHint.NONE)
 				.setParallelism(parallelism)
 				.name("Remove duplicate edges");
 

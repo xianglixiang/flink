@@ -25,23 +25,31 @@ import org.apache.flink.api.java.LocalEnvironment;
 import org.apache.flink.api.java.aggregation.Aggregations;
 import org.apache.flink.api.java.io.DiscardingOutputFormat;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.util.TestLogger;
+
 import org.junit.Test;
+
+import java.io.Serializable;
 
 import static org.junit.Assert.fail;
 
+/**
+ * Tests that verify subsequent calls to {@link ExecutionEnvironment#getExecutionPlan()} and
+ * {@link ExecutionEnvironment#execute()}/{@link ExecutionEnvironment#createProgramPlan()} do not cause any exceptions.
+ */
 @SuppressWarnings("serial")
-public class ExecutionPlanAfterExecutionTest implements java.io.Serializable {
+public class ExecutionPlanAfterExecutionTest extends TestLogger implements Serializable {
 
 	@Test
 	public void testExecuteAfterGetExecutionPlan() {
-		ExecutionEnvironment env = new LocalEnvironment(); 
-		env.getConfig().disableSysoutLogging();
-		
+		ExecutionEnvironment env = new LocalEnvironment();
+
 		DataSet<Integer> baseSet = env.fromElements(1, 2);
 
 		DataSet<Integer> result = baseSet.map(new MapFunction<Integer, Integer>() {
-			@Override public Integer map(Integer value) throws Exception { return value * 2; }
-		});
+			@Override public Integer map(Integer value) throws Exception {
+				return value * 2;
+			}});
 		result.output(new DiscardingOutputFormat<Integer>());
 
 		try {
@@ -53,16 +61,17 @@ public class ExecutionPlanAfterExecutionTest implements java.io.Serializable {
 			fail("Cannot run both #getExecutionPlan and #execute.");
 		}
 	}
-	
+
 	@Test
 	public void testCreatePlanAfterGetExecutionPlan() {
 		ExecutionEnvironment env = new LocalEnvironment();
-		
+
 		DataSet<Integer> baseSet = env.fromElements(1, 2);
 
 		DataSet<Integer> result = baseSet.map(new MapFunction<Integer, Integer>() {
-			@Override public Integer map(Integer value) throws Exception { return value * 2; }
-		});
+			@Override public Integer map(Integer value) throws Exception {
+				return value * 2;
+			}});
 		result.output(new DiscardingOutputFormat<Integer>());
 
 		try {
@@ -70,14 +79,13 @@ public class ExecutionPlanAfterExecutionTest implements java.io.Serializable {
 			env.createProgramPlan();
 		} catch (Exception e) {
 			e.printStackTrace();
-			fail("Cannot run both #getExecutionPlan and #execute. Message: "+e.getMessage());
+			fail("Cannot run both #getExecutionPlan and #execute. Message: " + e.getMessage());
 		}
 	}
 
 	@Test
 	public void testGetExecutionPlanOfRangePartition() {
 		ExecutionEnvironment env = new LocalEnvironment();
-		env.getConfig().disableSysoutLogging();
 
 		DataSet<Integer> baseSet = env.fromElements(1, 2);
 

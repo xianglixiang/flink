@@ -26,21 +26,25 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerFactory;
 import org.apache.flink.api.java.typeutils.runtime.RuntimeSerializerFactory;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.metrics.MetricGroup;
-import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.runtime.memory.MemoryManagerBuilder;
+import org.apache.flink.runtime.metrics.groups.OperatorMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.operators.Driver;
 import org.apache.flink.runtime.operators.ResettableDriver;
 import org.apache.flink.runtime.operators.TaskContext;
-import org.apache.flink.runtime.operators.sort.UnilateralSortMerger;
+import org.apache.flink.runtime.operators.sort.Sorter;
+import org.apache.flink.runtime.operators.sort.ExternalSorter;
 import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
+import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
 import org.apache.flink.util.TestLogger;
+
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.runner.RunWith;
@@ -53,7 +57,7 @@ import java.util.LinkedList;
 import java.util.List;
 
 @RunWith(Parameterized.class)
-public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLogger implements TaskContext<S, OUT> {
+public abstract class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLogger implements TaskContext<S, OUT> {
 	
 	protected static final int PAGE_SIZE = 32 * 1024;
 	
@@ -65,7 +69,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	
 	private final List<TypeComparator<IN>> comparators;
 	
-	private final List<UnilateralSortMerger<IN>> sorters;
+	private final List<Sorter<IN>> sorters;
 	
 	private final AbstractInvokable owner;
 	
@@ -101,7 +105,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		this.perSortMem = perSortMemory;
 		this.perSortFractionMem = (double) perSortMemory / totalMem;
 		this.ioManager = new IOManagerAsync();
-		this.memManager = totalMem > 0 ? new MemoryManager(totalMem, 1) : null;
+		this.memManager = totalMem > 0 ? MemoryManagerBuilder.newBuilder().setMemorySize(totalMem).build() : null;
 		
 		this.inputs = new ArrayList<>();
 		this.comparators = new ArrayList<>();
@@ -110,8 +114,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		this.owner = new DummyInvokable();
 		this.taskConfig = new TaskConfig(new Configuration());
 		this.executionConfig = executionConfig;
-		this.taskManageInfo = new TaskManagerRuntimeInfo(
-				"localhost", new Configuration(), System.getProperty("java.io.tmpdir"));
+		this.taskManageInfo = new TestingTaskManagerRuntimeInfo();
 	}
 	
 	@Parameterized.Parameters
@@ -138,22 +141,20 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		this.inputSerializers.add(serializer);
 	}
 	
-	@SuppressWarnings("unchecked")
 	public void addInputSorted(MutableObjectIterator<IN> input, TypeSerializer<IN> serializer, TypeComparator<IN> comp) throws Exception {
 		this.inputSerializers.add(serializer);
-		UnilateralSortMerger<IN> sorter = new UnilateralSortMerger<>(
-				this.memManager,
-				this.ioManager,
-				input,
-				this.owner,
-				new RuntimeSerializerFactory<>(serializer, (Class<IN>) serializer.createInstance().getClass()),
-				comp,
-				this.perSortFractionMem,
-				32,
-				0.8f,
-				true /*use large record handler*/,
-				false
-		);
+		Sorter<IN> sorter =
+			ExternalSorter.newBuilder(
+					this.memManager,
+					this.owner,
+					serializer,
+					comp)
+				.maxNumFileHandles(32)
+				.enableSpilling(ioManager, 0.8f)
+				.memoryFraction(this.perSortFractionMem)
+				.objectReuse(false)
+				.largeRecords(true)
+				.build(input);
 		this.sorters.add(sorter);
 		this.inputs.add(null);
 	}
@@ -327,6 +328,8 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 				in = this.sorters.get(index).getIterator();
 			} catch (InterruptedException e) {
 				throw new RuntimeException("Interrupted");
+			} catch (IOException e) {
+				throw new RuntimeException("IOException");
 			}
 			this.inputs.set(index, in);
 		}
@@ -371,8 +374,8 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	}
 	
 	@Override
-	public MetricGroup getMetricGroup() {
-		return new UnregisteredMetricsGroup();
+	public OperatorMetricGroup getMetricGroup() {
+		return UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup();
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -380,7 +383,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	@After
 	public void shutdownAll() throws Exception {
 		// 1st, shutdown sorters
-		for (UnilateralSortMerger<?> sorter : this.sorters) {
+		for (Sorter<?> sorter : this.sorters) {
 			if (sorter != null) {
 				sorter.close();
 			}
@@ -388,9 +391,8 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		this.sorters.clear();
 		
 		// 2nd, shutdown I/O
-		this.ioManager.shutdown();
-		Assert.assertTrue("I/O Manager has not properly shut down.", this.ioManager.isProperlyShutDown());
-		
+		this.ioManager.close();
+
 		// last, verify all memory is returned and shutdown mem manager
 		MemoryManager memMan = getMemoryManager();
 		if (memMan != null) {

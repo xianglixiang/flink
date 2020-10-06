@@ -18,55 +18,78 @@
 
 package org.apache.flink.streaming.util;
 
-import org.apache.flink.api.common.JobExecutionResult;
-import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.core.fs.Path;
+import org.apache.flink.runtime.minicluster.MiniCluster;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironmentFactory;
-import org.apache.flink.streaming.api.graph.StreamGraph;
-import org.apache.flink.test.util.ForkableFlinkMiniCluster;
-import org.apache.flink.util.Preconditions;
+import org.apache.flink.test.util.MiniClusterPipelineExecutorServiceLoader;
+
+import java.net.URL;
+import java.util.Collection;
+import java.util.Collections;
 
 /**
- * A StreamExecutionEnvironment that executes its jobs on a test cluster.
+ * A {@link StreamExecutionEnvironment} that executes its jobs on {@link MiniCluster}.
  */
 public class TestStreamEnvironment extends StreamExecutionEnvironment {
-	
-	/** The mini cluster in which this environment executes its jobs */
-	private ForkableFlinkMiniCluster executor;
-	
 
-	public TestStreamEnvironment(ForkableFlinkMiniCluster executor, int parallelism) {
-		this.executor = Preconditions.checkNotNull(executor);
+	public TestStreamEnvironment(
+			MiniCluster miniCluster,
+			int parallelism,
+			Collection<Path> jarFiles,
+			Collection<URL> classPaths) {
+		super(
+				new MiniClusterPipelineExecutorServiceLoader(miniCluster),
+				MiniClusterPipelineExecutorServiceLoader.createConfiguration(jarFiles, classPaths),
+				null);
+
 		setParallelism(parallelism);
 	}
-	
-	@Override
-	public JobExecutionResult execute(String jobName) throws Exception {
-		final StreamGraph streamGraph = getStreamGraph();
-		streamGraph.setJobName(jobName);
-		final JobGraph jobGraph = streamGraph.getJobGraph();
-		return executor.submitJobAndWait(jobGraph, false);
+
+	public TestStreamEnvironment(
+			MiniCluster miniCluster,
+			int parallelism) {
+		this(miniCluster, parallelism, Collections.emptyList(), Collections.emptyList());
 	}
 
-	// ------------------------------------------------------------------------
+	/**
+	 * Sets the streaming context environment to a TestStreamEnvironment that runs its programs on
+	 * the given cluster with the given default parallelism and the specified jar files and class
+	 * paths.
+	 *
+	 * @param miniCluster The MiniCluster to execute jobs on.
+	 * @param parallelism The default parallelism for the test programs.
+	 * @param jarFiles Additional jar files to execute the job with
+	 * @param classpaths Additional class paths to execute the job with
+	 */
+	public static void setAsContext(
+			final MiniCluster miniCluster,
+			final int parallelism,
+			final Collection<Path> jarFiles,
+			final Collection<URL> classpaths) {
+
+		StreamExecutionEnvironmentFactory factory = () -> new TestStreamEnvironment(
+				miniCluster,
+				parallelism,
+				jarFiles,
+				classpaths);
+
+		initializeContextEnvironment(factory);
+	}
 
 	/**
 	 * Sets the streaming context environment to a TestStreamEnvironment that runs its programs on
 	 * the given cluster with the given default parallelism.
-	 * 
-	 * @param cluster The test cluster to run the test program on.
+	 *
+	 * @param miniCluster The MiniCluster to execute jobs on.
 	 * @param parallelism The default parallelism for the test programs.
 	 */
-	public static void setAsContext(final ForkableFlinkMiniCluster cluster, final int parallelism) {
-		
-		StreamExecutionEnvironmentFactory factory = new StreamExecutionEnvironmentFactory() {
-			@Override
-			public StreamExecutionEnvironment createExecutionEnvironment() {
-				return new TestStreamEnvironment(cluster, parallelism);
-			}
-		};
-
-		initializeContextEnvironment(factory);
+	public static void setAsContext(final MiniCluster miniCluster, final int parallelism) {
+		setAsContext(
+				miniCluster,
+				parallelism,
+				Collections.emptyList(),
+				Collections.emptyList());
 	}
 
 	/**
@@ -74,5 +97,5 @@ public class TestStreamEnvironment extends StreamExecutionEnvironment {
 	 */
 	public static void unsetAsContext() {
 		resetContextEnvironment();
-	} 
+	}
 }

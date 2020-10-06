@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * <p/>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p/>
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,7 +17,12 @@
  */
 package org.apache.flink.runtime.state;
 
+import org.apache.flink.api.common.typeutils.CompositeTypeSerializerUtil;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.base.CollectionSerializerConfigSnapshot;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 
@@ -25,7 +30,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 
 @SuppressWarnings("ForLoopReplaceableByForEach")
-final public class ArrayListSerializer<T> extends TypeSerializer<ArrayList<T>> {
+final public class ArrayListSerializer<T> extends TypeSerializer<ArrayList<T>>
+		implements TypeSerializerConfigSnapshot.SelfResolvingTypeSerializer<ArrayList<T>> {
 
 	private static final long serialVersionUID = 1119562170939152304L;
 
@@ -33,6 +39,10 @@ final public class ArrayListSerializer<T> extends TypeSerializer<ArrayList<T>> {
 
 	public ArrayListSerializer(TypeSerializer<T> elementSerializer) {
 		this.elementSerializer = elementSerializer;
+	}
+
+	public TypeSerializer<T> getElementSerializer() {
+		return elementSerializer;
 	}
 
 	@Override
@@ -53,11 +63,17 @@ final public class ArrayListSerializer<T> extends TypeSerializer<ArrayList<T>> {
 
 	@Override
 	public ArrayList<T> copy(ArrayList<T> from) {
-		ArrayList<T> newList = new ArrayList<>(from.size());
-		for (int i = 0; i < from.size(); i++) {
-			newList.add(elementSerializer.copy(from.get(i)));
+		if (elementSerializer.isImmutableType()) {
+			// fast track using memcopy for immutable types
+			return new ArrayList<>(from);
+		} else {
+			// element-wise deep copy for mutable types
+			ArrayList<T> newList = new ArrayList<>(from.size());
+			for (int i = 0; i < from.size(); i++) {
+				newList.add(elementSerializer.copy(from.get(i)));
+			}
+			return newList;
 		}
-		return newList;
 	}
 
 	@Override
@@ -109,17 +125,47 @@ final public class ArrayListSerializer<T> extends TypeSerializer<ArrayList<T>> {
 	@Override
 	public boolean equals(Object obj) {
 		return obj == this ||
-			(obj != null && obj.getClass() == getClass() &&
-				elementSerializer.equals(((ArrayListSerializer<?>) obj).elementSerializer));
-	}
-
-	@Override
-	public boolean canEqual(Object obj) {
-		return true;
+				(obj != null && obj.getClass() == getClass() &&
+						elementSerializer.equals(((ArrayListSerializer<?>) obj).elementSerializer));
 	}
 
 	@Override
 	public int hashCode() {
 		return elementSerializer.hashCode();
+	}
+
+	// --------------------------------------------------------------------------------------------
+	// Serializer snapshots
+	// --------------------------------------------------------------------------------------------
+
+	@Override
+	public TypeSerializerSnapshot<ArrayList<T>> snapshotConfiguration() {
+		return new ArrayListSerializerSnapshot<>(this);
+	}
+
+	/**
+	 * We need to implement this method as a {@link TypeSerializerConfigSnapshot.SelfResolvingTypeSerializer}
+	 * because this serializer was previously returning a shared {@link CollectionSerializerConfigSnapshot}
+	 * as its snapshot.
+	 *
+	 * <p>When the {@link CollectionSerializerConfigSnapshot} is restored, it is incapable of redirecting
+	 * the compatibility check to {@link ArrayListSerializerSnapshot}, so we do it here.
+	 */
+	@Override
+	public TypeSerializerSchemaCompatibility<ArrayList<T>> resolveSchemaCompatibilityViaRedirectingToNewSnapshotClass(
+			TypeSerializerConfigSnapshot<ArrayList<T>> deprecatedConfigSnapshot) {
+
+		if (deprecatedConfigSnapshot instanceof CollectionSerializerConfigSnapshot) {
+			CollectionSerializerConfigSnapshot<ArrayList<T>, T> castedLegacySnapshot =
+				(CollectionSerializerConfigSnapshot<ArrayList<T>, T>) deprecatedConfigSnapshot;
+
+			ArrayListSerializerSnapshot<T> newSnapshot = new ArrayListSerializerSnapshot<>();
+			return CompositeTypeSerializerUtil.delegateCompatibilityCheckToNewSnapshot(
+				this,
+				newSnapshot,
+				castedLegacySnapshot.getNestedSerializerSnapshots());
+		}
+
+		return TypeSerializerSchemaCompatibility.incompatible();
 	}
 }

@@ -18,20 +18,25 @@
 
 package org.apache.flink.graph.library;
 
-import com.google.common.collect.Lists;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.LocalCollectionOutputFormat;
 import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.Vertex;
+import org.apache.flink.graph.asm.translate.TranslateEdgeValues;
+import org.apache.flink.graph.asm.translate.TranslateFunction;
+import org.apache.flink.graph.asm.translate.TranslateVertexValues;
+import org.apache.flink.graph.asm.translate.translators.ToNullValue;
 import org.apache.flink.graph.examples.data.SummarizationData;
 import org.apache.flink.graph.library.Summarization.EdgeValue;
 import org.apache.flink.test.util.MultipleProgramsTestBase;
 import org.apache.flink.types.NullValue;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
@@ -41,6 +46,9 @@ import java.util.regex.Pattern;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+/**
+ * Tests for {@link Summarization}.
+ */
 @RunWith(Parameterized.class)
 public class SummarizationITCase extends MultipleProgramsTestBase {
 
@@ -53,19 +61,18 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 	}
 
 	@Test
-	public void testWithVertexAndEdgeValues() throws Exception {
+	public void testWithVertexAndEdgeStringValues() throws Exception {
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 		Graph<Long, String, String> input = Graph.fromDataSet(
 				SummarizationData.getVertices(env),
 				SummarizationData.getEdges(env),
-				env
-		);
+				env);
 
-		List<Vertex<Long, Summarization.VertexValue<String>>> summarizedVertices = Lists.newArrayList();
-		List<Edge<Long, EdgeValue<String>>> summarizedEdges = Lists.newArrayList();
+		List<Vertex<Long, Summarization.VertexValue<String>>> summarizedVertices = new ArrayList<>();
+		List<Edge<Long, EdgeValue<String>>> summarizedEdges = new ArrayList<>();
 
 		Graph<Long, Summarization.VertexValue<String>, EdgeValue<String>> output =
-				input.run(new Summarization<Long, String, String>());
+				input.run(new Summarization<>());
 
 		output.getVertices().output(new LocalCollectionOutputFormat<>(summarizedVertices));
 		output.getEdges().output(new LocalCollectionOutputFormat<>(summarizedEdges));
@@ -77,19 +84,19 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 	}
 
 	@Test
-	public void testWithVertexAndAbsentEdgeValues() throws Exception {
+	public void testWithVertexAndAbsentEdgeStringValues() throws Exception {
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 		Graph<Long, String, NullValue> input = Graph.fromDataSet(
 				SummarizationData.getVertices(env),
-				SummarizationData.getEdgesWithAbsentValues(env),
-				env
-		);
+				SummarizationData.getEdges(env),
+				env)
+			.run(new TranslateEdgeValues<>(new ToNullValue<>()));
 
-		List<Vertex<Long, Summarization.VertexValue<String>>> summarizedVertices = Lists.newArrayList();
-		List<Edge<Long, EdgeValue<NullValue>>> summarizedEdges = Lists.newArrayList();
+		List<Vertex<Long, Summarization.VertexValue<String>>> summarizedVertices = new ArrayList<>();
+		List<Edge<Long, EdgeValue<NullValue>>> summarizedEdges = new ArrayList<>();
 
 		Graph<Long, Summarization.VertexValue<String>, EdgeValue<NullValue>> output =
-				input.run(new Summarization<Long, String, NullValue>());
+				input.run(new Summarization<>());
 
 		output.getVertices().output(new LocalCollectionOutputFormat<>(summarizedVertices));
 		output.getEdges().output(new LocalCollectionOutputFormat<>(summarizedEdges));
@@ -100,20 +107,38 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 		validateEdges(SummarizationData.EXPECTED_EDGES_ABSENT_VALUES, summarizedEdges);
 	}
 
-	private void validateVertices(String[] expectedVertices,
-																List<Vertex<Long, Summarization.VertexValue<String>>> actualVertices) {
+	@Test
+	public void testWithVertexAndEdgeLongValues() throws Exception {
+		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		Graph<Long, Long, Long> input = Graph.fromDataSet(
+				SummarizationData.getVertices(env),
+				SummarizationData.getEdges(env),
+				env)
+			.run(new TranslateVertexValues<>(new StringToLong()))
+			.run(new TranslateEdgeValues<>(new StringToLong()));
+
+		List<Vertex<Long, Summarization.VertexValue<Long>>> summarizedVertices = new ArrayList<>();
+		List<Edge<Long, EdgeValue<Long>>> summarizedEdges = new ArrayList<>();
+
+		Graph<Long, Summarization.VertexValue<Long>, EdgeValue<Long>> output =
+			input.run(new Summarization<>());
+
+		output.getVertices().output(new LocalCollectionOutputFormat<>(summarizedVertices));
+		output.getEdges().output(new LocalCollectionOutputFormat<>(summarizedEdges));
+
+		env.execute();
+
+		validateVertices(SummarizationData.EXPECTED_VERTICES, summarizedVertices);
+		validateEdges(SummarizationData.EXPECTED_EDGES_WITH_VALUES, summarizedEdges);
+	}
+
+	private <VV extends Comparable<VV>> void validateVertices(String[] expectedVertices, List<Vertex<Long, Summarization.VertexValue<VV>>> actualVertices) {
 		Arrays.sort(expectedVertices);
-		Collections.sort(actualVertices, new Comparator<Vertex<Long, Summarization.VertexValue<String>>>() {
+		Collections.sort(actualVertices, new Comparator<Vertex<Long, Summarization.VertexValue<VV>>>() {
 			@Override
-			public int compare(Vertex<Long, Summarization.VertexValue<String>> o1,
-												 Vertex<Long, Summarization.VertexValue<String>> o2) {
+			public int compare(Vertex<Long, Summarization.VertexValue<VV>> o1, Vertex<Long, Summarization.VertexValue<VV>> o2) {
 				int result = o1.getId().compareTo(o2.getId());
-				if (result == 0) {
-					result = o1.getValue().getVertexGroupValue().compareTo(o2.getValue().getVertexGroupValue());
-				}
-				if (result == 0) {
-					result = o1.getValue().getVertexGroupValue().compareTo(o2.getValue().getVertexGroupValue());
-				}
 				if (result == 0) {
 					result = o1.getValue().getVertexGroupValue().compareTo(o2.getValue().getVertexGroupValue());
 				}
@@ -126,8 +151,7 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 		}
 	}
 
-	private <EV extends Comparable<EV>> void validateEdges(String[] expectedEdges,
-														 List<Edge<Long, EdgeValue<EV>>> actualEdges) {
+	private <EV extends Comparable<EV>> void validateEdges(String[] expectedEdges, List<Edge<Long, EdgeValue<EV>>> actualEdges) {
 		Arrays.sort(expectedEdges);
 		Collections.sort(actualEdges, new Comparator<Edge<Long, EdgeValue<EV>>> () {
 
@@ -138,13 +162,7 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 					result = o1.getTarget().compareTo(o2.getTarget());
 				}
 				if (result == 0) {
-					result = o1.getTarget().compareTo(o2.getTarget());
-				}
-				if (result == 0) {
 					result = o1.getValue().getEdgeGroupValue().compareTo(o2.getValue().getEdgeGroupValue());
-				}
-				if (result == 0) {
-					result = o1.getValue().getEdgeGroupCount().compareTo(o2.getValue().getEdgeGroupCount());
 				}
 				return result;
 			}
@@ -155,10 +173,10 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 		}
 	}
 
-	private void validateVertex(String expected, Vertex<Long, Summarization.VertexValue<String>> actual) {
+	private <VV> void validateVertex(String expected, Vertex<Long, Summarization.VertexValue<VV>> actual) {
 		String[] tokens = TOKEN_SEPARATOR.split(expected);
 		assertTrue(getListFromIdRange(tokens[0]).contains(actual.getId()));
-		assertEquals(getGroupValue(tokens[1]), actual.getValue().getVertexGroupValue());
+		assertEquals(getGroupValue(tokens[1]), actual.getValue().getVertexGroupValue().toString());
 		assertEquals(getGroupCount(tokens[1]), actual.getValue().getVertexGroupCount());
 	}
 
@@ -171,8 +189,9 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 	}
 
 	private List<Long> getListFromIdRange(String idRange) {
-		List<Long> result = Lists.newArrayList();
-		for (String id : ID_SEPARATOR.split(idRange)) {
+		String[] split = ID_SEPARATOR.split(idRange);
+		List<Long> result = new ArrayList<>(split.length);
+		for (String id : split) {
 			result.add(Long.parseLong(id));
 		}
 		return result;
@@ -184,5 +203,13 @@ public class SummarizationITCase extends MultipleProgramsTestBase {
 
 	private Long getGroupCount(String token) {
 		return Long.valueOf(ID_SEPARATOR.split(token)[1]);
+	}
+
+	private static class StringToLong implements TranslateFunction<String, Long> {
+
+		@Override
+		public Long translate(String value, Long reuse) throws Exception {
+			return Long.parseLong(value);
+		}
 	}
 }

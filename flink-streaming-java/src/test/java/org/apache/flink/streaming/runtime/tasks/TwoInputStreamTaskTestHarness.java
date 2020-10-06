@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,19 +15,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.io.network.partition.consumer.StreamTestSingleInputGate;
-import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.graph.StreamEdge;
 import org.apache.flink.streaming.api.graph.StreamNode;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.runtime.partitioner.BroadcastPartitioner;
+import org.apache.flink.util.function.FunctionWithException;
 
-import java.io.IOException;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -35,13 +36,11 @@ import java.util.List;
 /**
  * Test harness for testing a {@link TwoInputStreamTask}.
  *
- * <p>
- * This mock Invokable provides the task with a basic runtime context and allows pushing elements
+ * <p>This mock Invokable provides the task with a basic runtime context and allows pushing elements
  * and watermarks into the task. {@link #getOutput()} can be used to get the emitted elements
  * and events. You are free to modify the retrieved list.
  *
- * <p>
- * After setting up everything the Task can be invoked using {@link #invoke()}. This will start
+ * <p>After setting up everything the Task can be invoked using {@link #invoke()}. This will start
  * a new Thread to execute the Task. Use {@link #waitForTaskCompletion()} to wait for the Task
  * thread to finish. Use {@link #processElement}
  * to send elements to the task. Use
@@ -49,22 +48,15 @@ import java.util.List;
  * Before waiting for the task to finish you must call {@link #endInput()} to signal to the task
  * that data entry is finished.
  *
- * <p>
- * When Elements or Events are offered to the Task they are put into a queue. The input gates
+ * <p>When Elements or Events are offered to the Task they are put into a queue. The input gates
  * of the Task read from this queue. Use {@link #waitForInputProcessing()} to wait until all
  * queues are empty. This must be used after entering some elements before checking the
  * desired output.
- *
- * <p>
- * When using this you need to add the following line to your test class to setup Powermock:
- * {@code {@literal @}PrepareForTest({ResultPartitionWriter.class})}
  */
 public class TwoInputStreamTaskTestHarness<IN1, IN2, OUT> extends StreamTaskTestHarness<OUT> {
 
-	private TypeInformation<IN1> inputType1;
 	private TypeSerializer<IN1> inputSerializer1;
 
-	private TypeInformation<IN2> inputType2;
 	private TypeSerializer<IN2> inputSerializer2;
 
 	private int[] inputGateAssignment;
@@ -74,19 +66,19 @@ public class TwoInputStreamTaskTestHarness<IN1, IN2, OUT> extends StreamTaskTest
 	 * of channels per input gate. Parameter inputGateAssignment specifies for each gate whether
 	 * it should be assigned to the first (1), or second (2) input of the task.
 	 */
-	public TwoInputStreamTaskTestHarness(TwoInputStreamTask<IN1, IN2, OUT> task,
+	public TwoInputStreamTaskTestHarness(
+			FunctionWithException<Environment, ? extends AbstractTwoInputStreamTask<IN1, IN2, OUT>, Exception> taskFactory,
 			int numInputGates,
 			int numInputChannelsPerGate,
 			int[] inputGateAssignment,
 			TypeInformation<IN1> inputType1,
 			TypeInformation<IN2> inputType2,
 			TypeInformation<OUT> outputType) {
-		super(task, outputType);
 
-		this.inputType1 = inputType1;
+		super(taskFactory, outputType);
+
 		inputSerializer1 = inputType1.createSerializer(executionConfig);
 
-		this.inputType2 = inputType2;
 		inputSerializer2 = inputType2.createSerializer(executionConfig);
 
 		this.numInputGates = numInputGates;
@@ -99,56 +91,59 @@ public class TwoInputStreamTaskTestHarness<IN1, IN2, OUT> extends StreamTaskTest
 	 * input gate is assigned to the first task input, the second input gate is assigned to the
 	 * second task input.
 	 */
-	public TwoInputStreamTaskTestHarness(TwoInputStreamTask<IN1, IN2, OUT> task,
+	public TwoInputStreamTaskTestHarness(
+			FunctionWithException<Environment, ? extends AbstractTwoInputStreamTask<IN1, IN2, OUT>, Exception> taskFactory,
 			TypeInformation<IN1> inputType1,
 			TypeInformation<IN2> inputType2,
 			TypeInformation<OUT> outputType) {
-		this(task, 2, 1, new int[] {1, 2}, inputType1, inputType2, outputType);
+
+		this(taskFactory, 2, 1, new int[] {1, 2}, inputType1, inputType2, outputType);
 	}
 
 	@Override
-	protected void initializeInputs() throws IOException, InterruptedException {
+	protected void initializeInputs() {
 
 		inputGates = new StreamTestSingleInputGate[numInputGates];
-		List<StreamEdge> inPhysicalEdges = new LinkedList<StreamEdge>();
+		List<StreamEdge> inPhysicalEdges = new LinkedList<>();
 
 		StreamOperator<IN1> dummyOperator = new AbstractStreamOperator<IN1>() {
 			private static final long serialVersionUID = 1L;
 		};
 
-		StreamNode sourceVertexDummy = new StreamNode(null, 0, "default group", dummyOperator, "source dummy", new LinkedList<OutputSelector<?>>(), SourceStreamTask.class);
-		StreamNode targetVertexDummy = new StreamNode(null, 1, "default group", dummyOperator, "target dummy", new LinkedList<OutputSelector<?>>(), SourceStreamTask.class);
+		StreamNode sourceVertexDummy = new StreamNode(0, "default group", null, dummyOperator, "source dummy", SourceStreamTask.class);
+		StreamNode targetVertexDummy = new StreamNode(1, "default group", null, dummyOperator, "target dummy", SourceStreamTask.class);
 
 		for (int i = 0; i < numInputGates; i++) {
 
 			switch (inputGateAssignment[i]) {
 				case 1: {
-					inputGates[i] = new StreamTestSingleInputGate<IN1>(
-							numInputChannelsPerGate,
-							bufferSize,
-							inputSerializer1);
-
+					inputGates[i] = new StreamTestSingleInputGate<>(
+						numInputChannelsPerGate,
+						i,
+						inputSerializer1,
+						bufferSize);
 
 					StreamEdge streamEdge = new StreamEdge(sourceVertexDummy,
 							targetVertexDummy,
 							1,
-							new LinkedList<String>(),
-							new BroadcastPartitioner<Object>());
+							new BroadcastPartitioner<>(),
+							null /* output tag */);
 
 					inPhysicalEdges.add(streamEdge);
 					break;
 				}
 				case 2: {
-					inputGates[i] = new StreamTestSingleInputGate<IN2>(
-							numInputChannelsPerGate,
-							bufferSize,
-							inputSerializer2);
+					inputGates[i] = new StreamTestSingleInputGate<>(
+						numInputChannelsPerGate,
+						i,
+						inputSerializer2,
+						bufferSize);
 
 					StreamEdge streamEdge = new StreamEdge(sourceVertexDummy,
 							targetVertexDummy,
 							2,
-							new LinkedList<String>(),
-							new BroadcastPartitioner<Object>());
+							new BroadcastPartitioner<>(),
+							null /* output tag */);
 
 					inPhysicalEdges.add(streamEdge);
 					break;
@@ -161,10 +156,14 @@ public class TwoInputStreamTaskTestHarness<IN1, IN2, OUT> extends StreamTaskTest
 		}
 
 		streamConfig.setInPhysicalEdges(inPhysicalEdges);
-		streamConfig.setNumberOfInputs(numInputGates);
-		streamConfig.setTypeSerializerIn1(inputSerializer1);
-		streamConfig.setTypeSerializerIn2(inputSerializer2);
+		streamConfig.setNumberOfNetworkInputs(numInputGates);
+		streamConfig.setTypeSerializersIn(inputSerializer1, inputSerializer2);
 	}
 
+	@Override
+	@SuppressWarnings("unchecked")
+	public AbstractTwoInputStreamTask<IN1, IN2, OUT> getTask() {
+		return (AbstractTwoInputStreamTask<IN1, IN2, OUT>) super.getTask();
+	}
 }
 

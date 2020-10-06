@@ -18,38 +18,38 @@
 
 package org.apache.flink.test.classloading.jar;
 
-import java.util.StringTokenizer;
-
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 import org.apache.flink.test.testdata.WordCountData;
 import org.apache.flink.util.Collector;
 
+import java.util.StringTokenizer;
+
+/**
+ * Test class used by the {@link org.apache.flink.test.classloading.ClassLoaderITCase}.
+ */
 @SuppressWarnings("serial")
 public class StreamingProgram {
-	
+
 	public static void main(String[] args) throws Exception {
-		
-		final String jarFile = args[0];
-		final String host = args[1];
-		final int port = Integer.parseInt(args[2]);
-		
-		StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(host, port, jarFile);
-		env.getConfig().disableSysoutLogging();
-		
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
 		DataStream<String> text = env.fromElements(WordCountData.TEXT).rebalance();
 
 		DataStream<Word> counts =
 				text.flatMap(new Tokenizer()).keyBy("word").sum("frequency");
 
-		counts.addSink(new NoOpSink());
+		counts.addSink(new DiscardingSink<>());
 
 		env.execute();
 	}
 	// --------------------------------------------------------------------------------------------
 
+	/**
+	 * POJO with word and count.
+	 */
 	public static class Word {
 
 		private String word;
@@ -85,19 +85,13 @@ public class StreamingProgram {
 		}
 	}
 
-	public static class Tokenizer implements FlatMapFunction<String, Word>{
+	private static class Tokenizer implements FlatMapFunction<String, Word>{
 		@Override
 		public void flatMap(String value, Collector<Word> out) throws Exception {
 			StringTokenizer tokenizer = new StringTokenizer(value);
 			while (tokenizer.hasMoreTokens()){
 				out.collect(new Word(tokenizer.nextToken(), 1));
 			}
-		}
-	}
-
-	public static class NoOpSink implements SinkFunction<Word>{
-		@Override
-		public void invoke(Word value) throws Exception {
 		}
 	}
 }
